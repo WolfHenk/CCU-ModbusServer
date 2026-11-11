@@ -3,7 +3,7 @@
 // Datei:        internal/quality/quality.go
 // Ersteller:    Wolfram Henkel
 // Datum:        11. Nov. 2026
-// Version:      0.2.1
+// Version:      0.2.2
 //
 // Copyright (c) 2026 Wolfram Henkel.
 //
@@ -48,7 +48,7 @@ const (
 	Missing    Reason = 2 // object no longer exists in ReGa
 	Unreach    Reason = 3 // device reports UNREACH = true
 	NeverSet   Reason = 4 // ReGa timestamp 0: no confirmed value yet
-	Unknown    Reason = 5 // object not polled (yet)
+	Unknown    Reason = 5 // object or its UNREACH state not polled (yet)
 )
 
 // String returns a short German text for the WebUI and the client sheet.
@@ -65,7 +65,7 @@ func (r Reason) String() string {
 	case NeverSet:
 		return "noch kein Wert empfangen"
 	case Unknown:
-		return "noch nicht gelesen"
+		return "noch nicht gelesen / Erreichbarkeit unbekannt"
 	}
 	return "unbekannt"
 }
@@ -123,7 +123,14 @@ func Judge(id, unreachID int, values map[int]rega.Reading, lastOK time.Time, max
 		return Missing
 	}
 	if unreachID != 0 {
-		if u, ok := values[unreachID]; ok && u.Found && u.Value == "true" {
+		// The device has an UNREACH datapoint: its state must be known.
+		// Not read yet or gone -> the reachability is unknown, so the
+		// value is not declared valid.
+		u, ok := values[unreachID]
+		if !ok || !u.Found {
+			return Unknown
+		}
+		if u.Value != "false" {
 			return Unreach
 		}
 	}
@@ -131,4 +138,22 @@ func Judge(id, unreachID int, values map[int]rega.Reading, lastOK time.Time, max
 		return NeverSet
 	}
 	return Good
+}
+
+// PollIDs returns the exported IDs plus the UNREACH IDs of their devices,
+// so that Judge always has the reachability it needs.
+func PollIDs(exported []int, unreach map[int]int) []int {
+	seen := map[int]bool{}
+	var out []int
+	add := func(id int) {
+		if id > 0 && !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	for _, id := range exported {
+		add(id)
+		add(unreach[id])
+	}
+	return out
 }

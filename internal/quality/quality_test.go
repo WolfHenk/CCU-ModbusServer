@@ -38,6 +38,7 @@ func TestJudge(t *testing.T) {
 		5:  {Found: true, Value: "false", Timestamp: 1}, // device B reachable
 		6:  {Found: true, Value: "1", Timestamp: 1000000},
 		7:  {Found: true, Value: "1", Timestamp: 0}, // never set on unreachable device
+		8:  {Found: true, Value: "", Timestamp: 1},  // UNREACH without a clear false
 		99: {Found: false},
 	}
 	cases := []struct {
@@ -54,7 +55,9 @@ func TestJudge(t *testing.T) {
 		{"unreach", 1, 4, fresh, Unreach, false},
 		{"reachable device", 1, 5, fresh, Good, true},
 		{"unreach beats never set", 7, 4, fresh, Unreach, false},
-		{"unreach datapoint missing -> ignore", 1, 99, fresh, Good, true},
+		{"unreach datapoint gone -> unknown", 1, 99, fresh, Unknown, false},
+		{"unreach datapoint not polled -> unknown", 1, 98, fresh, Unknown, false},
+		{"unreach value not false -> unreach", 1, 8, fresh, Unreach, false},
 		{"not polled", 42, 0, fresh, Unknown, false},
 		{"source down", 1, 0, now.Add(-time.Minute), SourceDown, false},
 		{"never polled", 1, 0, time.Time{}, SourceDown, false},
@@ -97,6 +100,19 @@ func TestUnreachIDs(t *testing.T) {
 	for r := Good; r <= Unknown; r++ {
 		if r.String() == "unbekannt" {
 			t.Errorf("reason %d without text", r)
+		}
+	}
+}
+
+func TestPollIDs(t *testing.T) {
+	got := PollIDs([]int{12, 31, 12, 0, 13}, map[int]int{12: 10, 13: 10})
+	want := []int{12, 10, 31, 13}
+	if len(got) != len(want) {
+		t.Fatalf("got %v", got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("got %v want %v", got, want)
 		}
 	}
 }

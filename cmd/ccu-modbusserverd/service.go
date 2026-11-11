@@ -100,8 +100,9 @@ func (s *service) catalogLoop(ctx context.Context) {
 	}
 }
 
-// ccuOK reports whether the CCU connection is healthy: a catalog exists
-// and the last poll cycle succeeded.
+// ccuOK reports whether the CCU logic is reachable: a catalog exists and
+// the last poll cycle (or ping) succeeded. It says nothing about the
+// validity of single values; that is the job of the per-value quality.
 func (s *service) ccuOK() bool {
 	s.mu.RLock()
 	loaded := s.cat != nil
@@ -121,7 +122,7 @@ func (s *service) updateStatus() {
 // Status is the JSON answer of /api/status.
 type Status struct {
 	Version       string        `json:"version"`
-	CCUOK         bool          `json:"ccu_ok"`
+	CCUOK         bool          `json:"ccu_ok"` // CCU logic reachable; not: all values valid
 	Exports       int           `json:"exports"`
 	CatalogLoaded time.Time     `json:"catalog_loaded"`
 	CatalogError  string        `json:"catalog_error"`

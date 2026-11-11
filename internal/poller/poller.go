@@ -3,7 +3,7 @@
 // Datei:        internal/poller/poller.go
 // Ersteller:    Wolfram Henkel
 // Datum:        11. Nov. 2026
-// Version:      0.2.0
+// Version:      0.2.2
 //
 // Copyright (c) 2026 Wolfram Henkel.
 //
@@ -124,6 +124,13 @@ func (p *Poller) SetItems(ids []int) {
 	sort.Ints(list)
 	p.mu.Lock()
 	p.items = list
+	// Values of IDs that are no longer polled are dropped at once, so a
+	// removed or re-mapped object never shows an old reading.
+	for id := range p.values {
+		if !seen[id] {
+			delete(p.values, id)
+		}
+	}
 	p.mu.Unlock()
 	select {
 	case p.changed <- struct{}{}:

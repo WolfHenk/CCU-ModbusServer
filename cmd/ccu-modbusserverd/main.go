@@ -89,7 +89,7 @@ func loadConfig(path string) (Config, error) {
 
 // Status block at the start of the input registers.
 const (
-	statusFlags   = 0 // bit 0: CCU connection ok
+	statusFlags   = 0 // bit 0: CCU logic reachable (catalog + last read ok); NOT "all values valid"
 	statusUptime  = 1 // uint32, seconds since start (registers 1-2)
 	statusExports = 3 // number of exported values
 	statusLen     = 4

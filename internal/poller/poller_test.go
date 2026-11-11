@@ -228,3 +228,27 @@ func TestStopsOnCancel(t *testing.T) {
 		t.Fatal("Run did not return")
 	}
 }
+
+func TestSetItemsDropsRemovedValues(t *testing.T) {
+	src := &fakeSource{}
+	p := New(src, Config{Interval: time.Hour})
+	p.SetItems([]int{1, 2, 3})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go p.Run(ctx)
+	waitFor(t, func() bool { return p.Health().Cycles >= 1 })
+	src.mu.Lock()
+	src.fail = errors.New("down") // next cycle fails: nothing new arrives
+	src.mu.Unlock()
+	p.SetItems([]int{2, 4})
+	v, _ := p.Values()
+	if _, ok := v[1]; ok {
+		t.Error("removed id 1 still has a value")
+	}
+	if _, ok := v[4]; ok {
+		t.Error("new id 4 has a value before it was read")
+	}
+	if !v[2].Found {
+		t.Error("kept id 2 lost its value")
+	}
+}
