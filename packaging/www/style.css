@@ -98,5 +98,6 @@ dialog form{padding:18px}
  th,td{font-size:9pt;padding:3px 5px}
  .sheettable td,.sheettable th{white-space:normal}
  .sheettable tr{break-inside:avoid}
+ .tablewrap{overflow:visible;border:0}
  th{background:#eee!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
 }

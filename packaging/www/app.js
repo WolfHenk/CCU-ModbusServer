@@ -415,7 +415,7 @@ function renderSheet() {
   $('sheet').replaceChildren(
     el('h2', {class: 'printonly'}, 'CCU-ModbusServer – Client-Einstellungen'),
     head,
-    rows.length ? tbl : el('div', {class: 'empty'}, 'Noch keine Werte freigegeben.'));
+    rows.length ? el('div', {class: 'tablewrap sheetwrap'}, tbl) : el('div', {class: 'empty'}, 'Noch keine Werte freigegeben.'));
 }
 
 // Text that a spreadsheet would read as a formula (=, +, -, @, tab, CR)
