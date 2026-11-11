@@ -187,13 +187,15 @@ func classify(valueType int, list []string, ops int) Type {
 	case 20:
 		return String
 	}
+	// Seen on a productive CCU: ValueType 6 for LEVEL of the CCU's own
+	// virtual BidCoS-RF keys (write-only). Semantics unknown: not offered.
 	return Other
 }
 
 func atoi(s string) (int, error) { return strconv.Atoi(strings.TrimSpace(s)) }
 
 func parseCatalog(lines []string) (*Catalog, error) {
-	cat := &Catalog{}
+	cat := &Catalog{Devices: []Device{}, SysVars: []SysVar{}}
 	var dev *Device
 	var ch *Channel
 	byChannel := map[int]*Channel{}
@@ -217,7 +219,7 @@ func parseCatalog(lines []string) (*Catalog, error) {
 			if err != nil {
 				return nil, bad()
 			}
-			cat.Devices = append(cat.Devices, Device{ReGaID: id, Interface: decode(f[2]), Address: decode(f[3]), Name: decode(f[4]), Type: decode(f[5])})
+			cat.Devices = append(cat.Devices, Device{ReGaID: id, Interface: decode(f[2]), Address: decode(f[3]), Name: decode(f[4]), Type: decode(f[5]), Channels: []Channel{}})
 			dev = &cat.Devices[len(cat.Devices)-1]
 			ch = nil
 		case "C":
@@ -228,7 +230,7 @@ func parseCatalog(lines []string) (*Catalog, error) {
 			if err != nil {
 				return nil, bad()
 			}
-			dev.Channels = append(dev.Channels, Channel{ReGaID: id, Address: decode(f[2]), Name: decode(f[3]), Type: decode(f[4])})
+			dev.Channels = append(dev.Channels, Channel{ReGaID: id, Address: decode(f[2]), Name: decode(f[3]), Type: decode(f[4]), Points: []Point{}})
 			ch = &dev.Channels[len(dev.Channels)-1]
 		case "P":
 			if len(f) != 12 || ch == nil {
