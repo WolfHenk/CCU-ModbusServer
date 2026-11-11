@@ -77,14 +77,20 @@ type Engine struct {
 	// never be overtaken by an earlier one.
 	rebuildMu sync.Mutex
 
-	mu      sync.Mutex
-	m       *mapping.File
-	cat     *rega.Catalog
-	objs    []object        // active entries
-	byAddr  map[addrKey]int // area+address -> index into objs
-	tab     *table.Table
-	last    map[string]lastWords // last good words per entry key
-	started time.Time
+	mu     sync.Mutex
+	m      *mapping.File
+	cat    *rega.Catalog
+	objs   []object        // active entries
+	byAddr map[addrKey]int // area+address -> index into objs
+	tab    *table.Table
+	last   map[string]lastWords // last good words per entry key
+
+	// write path
+	wsrc      ValueSetter
+	wcfg      WriteConfig
+	lastWrite map[string]time.Time
+	wlog      []LogEntry
+	started   time.Time
 }
 
 // lastWords is a substitute value together with the representation it
@@ -114,6 +120,7 @@ func New(m *mapping.File, pol Poller, sink TableSink, statusSlots []table.Slot, 
 		StatusSlots: statusSlots, MaxAge: maxAge,
 		pol: pol, sink: sink, rec: quality.NewReception(),
 		m: m.Clone(), last: map[string]lastWords{}, started: time.Now(),
+		lastWrite: map[string]time.Time{},
 	}
 	e.rebuildMu.Lock()
 	defer e.rebuildMu.Unlock()
