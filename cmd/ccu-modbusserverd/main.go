@@ -33,6 +33,7 @@ import (
 	"log"
 	"math"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
@@ -40,6 +41,7 @@ import (
 	"time"
 
 	"github.com/WolfHenk/CCU-ModbusServer/internal/modbus"
+	"github.com/WolfHenk/CCU-ModbusServer/internal/poller"
 	"github.com/WolfHenk/CCU-ModbusServer/internal/rega"
 	"github.com/WolfHenk/CCU-ModbusServer/internal/table"
 )
@@ -53,10 +55,12 @@ type Config struct {
 	OnlyUnitID     *uint8 `json:"only_unit_id"`
 	MaxConnections int    `json:"max_connections"`
 	ReGaURL        string `json:"rega_url"`
+	PollIntervalMS int    `json:"poll_interval_ms"`
+	APIListen      string `json:"api_listen"`
 }
 
 func loadConfig(path string) (Config, error) {
-	c := Config{Schema: 1, Port: 502, ReGaURL: rega.DefaultURL}
+	c := Config{Schema: 1, Port: 502, ReGaURL: rega.DefaultURL, PollIntervalMS: 1000, APIListen: "127.0.0.1:18711"}
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return c, err
@@ -72,6 +76,12 @@ func loadConfig(path string) (Config, error) {
 	}
 	if c.MaxConnections < 0 || c.MaxConnections > 64 {
 		return c, fmt.Errorf("%s: max_connections must be 0..64", path)
+	}
+	if c.PollIntervalMS < 200 || c.PollIntervalMS > 60000 {
+		return c, fmt.Errorf("%s: poll_interval_ms must be 200..60000", path)
+	}
+	if host, _, err := net.SplitHostPort(c.APIListen); err != nil || (host != "127.0.0.1" && host != "::1" && host != "localhost") {
+		return c, fmt.Errorf("%s: api_listen must be a loopback address", path)
 	}
 	return c, nil
 }
@@ -304,14 +314,30 @@ func main() {
 		MaxConnections: cfg.MaxConnections,
 	}, tab, table.Loopback{T: tab})
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	rc := rega.NewClient(cfg.ReGaURL)
+	pol := poller.New(rc, poller.Config{Interval: time.Duration(cfg.PollIntervalMS) * time.Millisecond})
+	svc := &service{version: version, src: rc, pol: pol, tab: tab, exports: exports}
+	pol.OnCycle = func(map[int]rega.Reading, poller.Health) { svc.updateStatus() }
+	go pol.Run(ctx)
+	go svc.catalogLoop(ctx)
+
+	apiLn, err := net.Listen("tcp", cfg.APIListen)
+	if err != nil {
+		log.Fatalf("api listen %s: %v", cfg.APIListen, err)
+	}
+	apiSrv := &http.Server{Handler: svc.api(), ReadHeaderTimeout: 5 * time.Second}
+	go apiSrv.Serve(apiLn)
+
 	started := time.Now()
-	stop := make(chan struct{})
 	go func() {
 		t := time.NewTicker(time.Second)
 		defer t.Stop()
 		for {
 			select {
-			case <-stop:
+			case <-ctx.Done():
 				return
 			case <-t.C:
 				up := uint32(time.Since(started) / time.Second)
@@ -326,7 +352,8 @@ func main() {
 	signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT)
 	go func() {
 		<-sig
-		close(stop)
+		cancel()
+		apiSrv.Close()
 		srv.Close()
 	}()
 

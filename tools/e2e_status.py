@@ -64,7 +64,7 @@ def main():
     flags, up_hi, up_lo, exports = struct.unpack(">HHHH", r[2:])
     up1 = (up_hi << 16) | up_lo
     check("exports == 0", exports == 0, str(exports))
-    check("CCU flag 0 in stage 1", flags == 0, str(flags))
+    check("CCU-Verbindung (Bit 0) ok", flags & 1 == 1, str(flags))
     time.sleep(2.2)
     r = call(s, 2, struct.pack(">BHH", 4, 1, 2))
     up2 = struct.unpack(">I", r[2:6])[0]

@@ -134,3 +134,17 @@ func decode(s string) string {
 	}
 	return string(r)
 }
+
+// Ping runs an empty script and checks that ReGa answers completely.
+func (c *Client) Ping(ctx context.Context) error {
+	lines, err := c.Run(ctx, "")
+	if err != nil {
+		return err
+	}
+	for _, l := range lines {
+		if l != "" {
+			return fmt.Errorf("rega: unexpected ping output %q", l)
+		}
+	}
+	return nil
+}

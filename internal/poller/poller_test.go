@@ -1,0 +1,230 @@
+// -----------------------------------------------------------------------------
+// Projekt:      CCU-ModbusServer
+// Datei:        internal/poller/poller_test.go
+// Ersteller:    Wolfram Henkel
+// Datum:        11. Nov. 2026
+// Version:      0.2.0
+//
+// Copyright (c) 2026 Wolfram Henkel.
+//
+// Lizenz:       CCU-ModbusServer-Lizenz für kostenfreie Nutzung und
+//               Weitergabe, Version 1.1.
+//
+// Private und gewerbliche Nutzung sind erlaubt.
+// Die Software und Änderungen dürfen nur kostenlos unter
+// derselben Lizenz und mit vollständigem Quellcode weitergegeben werden.
+//
+// Vollständiger Lizenztext: LICENSE
+// -----------------------------------------------------------------------------
+
+package poller
+
+import (
+	"context"
+	"errors"
+	"strconv"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/WolfHenk/CCU-ModbusServer/internal/rega"
+)
+
+type fakeSource struct {
+	mu       sync.Mutex
+	calls    [][]int
+	pings    int
+	fail     error
+	failOnce map[int]bool // fail the batch that starts with this id
+	sleep    time.Duration
+	active   atomic.Int32
+	overlap  atomic.Bool
+	gen      int
+}
+
+func (f *fakeSource) ReadValues(ctx context.Context, ids []int) (map[int]rega.Reading, error) {
+	if f.active.Add(1) > 1 {
+		f.overlap.Store(true)
+	}
+	defer f.active.Add(-1)
+	if f.sleep > 0 {
+		time.Sleep(f.sleep)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, append([]int(nil), ids...))
+	if f.fail != nil {
+		return nil, f.fail
+	}
+	if f.failOnce[ids[0]] {
+		delete(f.failOnce, ids[0])
+		return nil, errors.New("batch failed")
+	}
+	f.gen++
+	out := map[int]rega.Reading{}
+	for _, id := range ids {
+		out[id] = rega.Reading{Found: true, Value: strconv.Itoa(f.gen), Timestamp: 1}
+	}
+	return out, nil
+}
+
+func (f *fakeSource) Ping(ctx context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.pings++
+	return f.fail
+}
+
+func waitFor(t *testing.T, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatal("timeout")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func TestDelayThrottle(t *testing.T) {
+	c := Config{}
+	c.defaults()
+	if d := c.delay(10*time.Millisecond, 5); d != time.Second {
+		t.Errorf("cheap read: %v", d)
+	}
+	// 200 ms read at 10 % share -> 1.8 s pause
+	if d := c.delay(200*time.Millisecond, 5); d != 1800*time.Millisecond {
+		t.Errorf("expensive read: %v", d)
+	}
+	if d := c.delay(time.Millisecond, 0); d != 10*time.Second {
+		t.Errorf("idle: %v", d)
+	}
+}
+
+func TestBatchingDedupAndValues(t *testing.T) {
+	src := &fakeSource{}
+	p := New(src, Config{Interval: time.Hour, Batch: 3})
+	p.SetItems([]int{5, 1, 2, 2, 0, -1, 4, 3})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go p.Run(ctx)
+	waitFor(t, func() bool { return p.Health().Cycles >= 1 })
+	src.mu.Lock()
+	calls := src.calls
+	src.mu.Unlock()
+	if len(calls) != 2 || len(calls[0]) != 3 || len(calls[1]) != 2 || calls[0][0] != 1 || calls[1][1] != 5 {
+		t.Fatalf("batches: %v", calls)
+	}
+	v, h := p.Values()
+	if !h.OK || h.Items != 5 || len(v) != 5 || !v[4].Found {
+		t.Fatalf("values %v health %+v", v, h)
+	}
+}
+
+func TestFailedBatchDiscardsWholeCycleAndKeepsOldValues(t *testing.T) {
+	src := &fakeSource{}
+	p := New(src, Config{Interval: 20 * time.Millisecond, Batch: 2, BackoffMin: 20 * time.Millisecond})
+	p.SetItems([]int{1, 2, 3})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var cycles []map[int]rega.Reading
+	var mu sync.Mutex
+	p.OnCycle = func(v map[int]rega.Reading, h Health) {
+		mu.Lock()
+		cycles = append(cycles, v)
+		mu.Unlock()
+	}
+	go p.Run(ctx)
+	waitFor(t, func() bool { return p.Health().Cycles >= 1 })
+	first, _ := p.Values()
+	src.mu.Lock()
+	src.failOnce = map[int]bool{3: true} // second batch of the next cycle fails
+	src.mu.Unlock()
+	waitFor(t, func() bool { return p.Health().Failures >= 1 })
+	v, h := p.Values()
+	if h.OK || h.LastError == "" {
+		t.Fatalf("health %+v", h)
+	}
+	if v[1].Value != first[1].Value || v[3].Value != first[3].Value {
+		t.Fatalf("partial cycle leaked: first %v now %v", first, v)
+	}
+	waitFor(t, func() bool { return p.Health().OK })
+	mu.Lock()
+	defer mu.Unlock()
+	sawNil := false
+	for _, c := range cycles {
+		if c == nil {
+			sawNil = true
+		}
+	}
+	if !sawNil {
+		t.Error("OnCycle not called with nil after failure")
+	}
+}
+
+func TestBackoffGrowsAndCaps(t *testing.T) {
+	src := &fakeSource{fail: errors.New("down")}
+	p := New(src, Config{BackoffMin: 10 * time.Millisecond, BackoffMax: 40 * time.Millisecond})
+	p.SetItems([]int{1})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var delays []time.Duration
+	var mu sync.Mutex
+	p.OnCycle = func(_ map[int]rega.Reading, h Health) {
+		mu.Lock()
+		delays = append(delays, h.NextDelay)
+		mu.Unlock()
+	}
+	go p.Run(ctx)
+	waitFor(t, func() bool { return p.Health().Failures >= 5 })
+	// item changes must not bypass the backoff
+	before := p.Health().Cycles
+	for i := 0; i < 20; i++ {
+		p.SetItems([]int{1, 2})
+	}
+	time.Sleep(15 * time.Millisecond)
+	if after := p.Health().Cycles; after > before+1 {
+		t.Errorf("SetItems bypassed backoff: %d -> %d cycles", before, after)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	want := []time.Duration{10, 20, 40, 40, 40}
+	for i, w := range want {
+		if delays[i] != w*time.Millisecond {
+			t.Fatalf("delays %v", delays[:5])
+		}
+	}
+}
+
+func TestIdlePingsAndNoOverlap(t *testing.T) {
+	src := &fakeSource{sleep: 5 * time.Millisecond}
+	p := New(src, Config{IdleInterval: 10 * time.Millisecond, Interval: time.Millisecond})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go p.Run(ctx)
+	waitFor(t, func() bool { src.mu.Lock(); defer src.mu.Unlock(); return src.pings >= 2 })
+	if !p.Health().OK {
+		t.Fatal("idle ping not healthy")
+	}
+	p.SetItems([]int{1, 2, 3})
+	waitFor(t, func() bool { return p.Health().Cycles >= 10 })
+	if src.overlap.Load() {
+		t.Fatal("overlapping reads")
+	}
+}
+
+func TestStopsOnCancel(t *testing.T) {
+	src := &fakeSource{}
+	p := New(src, Config{Interval: time.Hour})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { p.Run(ctx); close(done) }()
+	waitFor(t, func() bool { return p.Health().Cycles >= 1 })
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Run did not return")
+	}
+}
