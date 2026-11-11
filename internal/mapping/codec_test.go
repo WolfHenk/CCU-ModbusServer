@@ -191,19 +191,20 @@ func TestEncodeFloat32Overflow(t *testing.T) {
 	}
 }
 
-// Regression M2: central write validation.
+// Regression M2/W3: central write validation.
 func TestCheckWriteValue(t *testing.T) {
 	f := func(v float64) *float64 { return &v }
+	list3 := []string{"AUTO", "MANU", "PARTY"}
+	gap := []string{"NO_ERROR", "", "", "SABOTAGE"}
 	ok := []struct {
 		t        rega.Type
 		v        float64
 		min, max *float64
-		list     int
+		list     []string
 	}{
-		{rega.Bool, 1, nil, nil, 0}, {rega.Bool, 0, nil, nil, 0}, {rega.Action, 1, nil, nil, 0},
-		{rega.Enum, 0, nil, nil, 3}, {rega.Enum, 2, nil, nil, 3},
-		{rega.Integer, 5, f(0), f(10), 0}, {rega.Float, 21.5, f(4.5), f(30.5), 0},
-		{rega.Float, 1e9, nil, nil, 0},
+		{rega.Bool, 1, nil, nil, nil}, {rega.Bool, 0, nil, nil, nil}, {rega.Action, 1, nil, nil, nil},
+		{rega.Enum, 0, nil, nil, list3}, {rega.Enum, 2, nil, nil, list3}, {rega.Enum, 3, nil, nil, gap},
+		{rega.Integer, 5, f(0), f(10), nil}, {rega.Float, 21.5, f(4.5), f(30.5), nil},
 	}
 	for _, c := range ok {
 		if err := CheckWriteValue(c.t, c.v, c.min, c.max, c.list); err != nil {
@@ -214,15 +215,17 @@ func TestCheckWriteValue(t *testing.T) {
 		t        rega.Type
 		v        float64
 		min, max *float64
-		list     int
+		list     []string
 	}{
-		{rega.Bool, 2, nil, nil, 0}, {rega.Action, -1, nil, nil, 0},
-		{rega.Enum, 3, nil, nil, 3}, {rega.Enum, -1, nil, nil, 3}, {rega.Enum, 1.5, nil, nil, 3}, {rega.Enum, 0, nil, nil, 0},
-		{rega.Integer, 5.5, f(0), f(10), 0}, {rega.Integer, 11, f(0), f(10), 0}, {rega.Integer, -1, f(0), f(10), 0},
-		{rega.Float, 30.6, f(4.5), f(30.5), 0}, {rega.Float, 4.4, f(4.5), f(30.5), 0},
-		{rega.Float, math.NaN(), nil, nil, 0}, {rega.Float, math.Inf(1), nil, nil, 0},
-		{rega.Float, 1, f(math.NaN()), nil, 0},
-		{rega.String, 1, nil, nil, 0}, {rega.Other, 1, nil, nil, 0},
+		{rega.Bool, 2, nil, nil, nil}, {rega.Action, -1, nil, nil, nil},
+		{rega.Enum, 3, nil, nil, list3}, {rega.Enum, -1, nil, nil, list3}, {rega.Enum, 1.5, nil, nil, list3}, {rega.Enum, 0, nil, nil, nil},
+		{rega.Enum, 1, nil, nil, gap}, // empty position (W3)
+		{rega.Integer, 5.5, f(0), f(10), nil}, {rega.Integer, 11, f(0), f(10), nil}, {rega.Integer, -1, f(0), f(10), nil},
+		{rega.Float, 30.6, f(4.5), f(30.5), nil}, {rega.Float, 4.4, f(4.5), f(30.5), nil},
+		{rega.Float, math.NaN(), f(0), f(1), nil}, {rega.Float, math.Inf(1), f(0), f(1), nil},
+		{rega.Float, 1, f(math.NaN()), f(2), nil},
+		{rega.Float, 1e9, nil, nil, nil}, {rega.Float, 1, f(0), nil, nil}, {rega.Integer, 1, nil, f(5), nil}, // unknown range (W3)
+		{rega.String, 1, nil, nil, nil}, {rega.Other, 1, nil, nil, nil},
 	}
 	for _, c := range bad {
 		if err := CheckWriteValue(c.t, c.v, c.min, c.max, c.list); err == nil {

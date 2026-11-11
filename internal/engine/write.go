@@ -95,8 +95,18 @@ func (e *Engine) SetWriter(w ValueSetter, cfg WriteConfig) {
 	if cfg.Timeout <= 0 {
 		cfg.Timeout = 5 * time.Second
 	}
+	// deep copy: the caller's slice and networks may change later
+	allow := make([]*net.IPNet, 0, len(cfg.Allow))
+	for _, n := range cfg.Allow {
+		if n == nil {
+			continue
+		}
+		allow = append(allow, &net.IPNet{IP: append(net.IP(nil), n.IP...), Mask: append(net.IPMask(nil), n.Mask...)})
+	}
+	cfg.Allow = allow
 	e.mu.Lock()
 	e.wsrc, e.wcfg = w, cfg
+	e.wgen++
 	e.mu.Unlock()
 }
 
@@ -210,7 +220,7 @@ func (e *Engine) write(client net.Addr, area table.Area, start int, words []uint
 		if err != nil {
 			return reject(en.Key, en.Label, 0, err.Error(), modbus.ExIllegalDataValue)
 		}
-		if err := mapping.CheckWriteValue(o.meta.typ, v, o.meta.min, o.meta.max, o.meta.listLen); err != nil {
+		if err := mapping.CheckWriteValue(o.meta.typ, v, o.meta.min, o.meta.max, o.meta.list); err != nil {
 			return reject(en.Key, en.Label, v, err.Error(), modbus.ExIllegalDataValue)
 		}
 		same := false
@@ -228,17 +238,50 @@ func (e *Engine) write(client net.Addr, area table.Area, start int, words []uint
 		addr += n
 	}
 	// Reserve the time slots before releasing the lock, so concurrent
-	// clients cannot both pass the rate limit.
+	// clients cannot both pass the rate limit. The previous times are
+	// kept to give back the slots of steps that are not executed.
+	prev := map[string]time.Time{}
 	for _, s := range steps {
 		if !s.same {
+			if t, ok := e.lastWrite[s.obj.entry.Key]; ok {
+				prev[s.obj.entry.Key] = t
+			}
 			e.lastWrite[s.obj.entry.Key] = now
 		}
 	}
 	timeout := e.wcfg.Timeout
+	gen := e.wgen
 	e.mu.Unlock()
 
-	for _, s := range steps {
+	// release gives back the reservations of steps[i:] and logs them as
+	// not executed.
+	release := func(i int, why string) {
+		e.mu.Lock()
+		defer e.mu.Unlock()
+		for _, s := range steps[i:] {
+			k := s.obj.entry.Key
+			if !s.same {
+				if t, ok := prev[k]; ok {
+					e.lastWrite[k] = t
+				} else {
+					delete(e.lastWrite, k)
+				}
+			}
+			e.logWrite(LogEntry{Time: now, Client: cl, Key: k, Label: s.obj.entry.Label, Value: s.value, Result: why})
+		}
+	}
+
+	for i, s := range steps {
 		en := s.obj.entry
+		// Exports, write permission or allow list may have changed while
+		// earlier steps were executed: then nothing more is sent.
+		e.mu.Lock()
+		changed := e.wgen != gen
+		e.mu.Unlock()
+		if changed {
+			release(i, "nicht ausgeführt: Freigabe wurde währenddessen geändert")
+			return modbus.ExServerDeviceFail
+		}
 		if s.same {
 			e.record(LogEntry{Time: now, Client: cl, Key: en.Key, Label: en.Label, Value: s.value, Result: "unverändert"})
 			continue
@@ -252,6 +295,9 @@ func (e *Engine) write(client net.Addr, area table.Area, start int, words []uint
 				why = "CCU-Fehler: " + err.Error()
 			}
 			e.record(LogEntry{Time: now, Client: cl, Key: en.Key, Label: en.Label, Value: s.value, Result: why})
+			if i+1 < len(steps) {
+				release(i+1, "nicht ausgeführt: vorheriger Wert abgelehnt")
+			}
 			return modbus.ExServerDeviceFail
 		}
 		e.record(LogEntry{Time: now, Client: cl, Key: en.Key, Label: en.Label, Value: s.value, Result: "ok (von CCU angenommen, nicht bestätigt ausgeführt)"})

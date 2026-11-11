@@ -315,3 +315,44 @@ func parseCatalog(lines []string) (*Catalog, error) {
 	}
 	return cat, nil
 }
+
+func cloneFloat(p *float64) *float64 {
+	if p == nil {
+		return nil
+	}
+	v := *p
+	return &v
+}
+
+// Clone returns a deep copy (nil stays nil).
+func (c *Catalog) Clone() *Catalog {
+	if c == nil {
+		return nil
+	}
+	out := &Catalog{Loaded: c.Loaded, Devices: make([]Device, len(c.Devices)), SysVars: make([]SysVar, len(c.SysVars))}
+	for i, d := range c.Devices {
+		nd := d
+		nd.Channels = make([]Channel, len(d.Channels))
+		for j, ch := range d.Channels {
+			nc := ch
+			nc.Rooms = append([]string(nil), ch.Rooms...)
+			nc.Functions = append([]string(nil), ch.Functions...)
+			nc.Points = make([]Point, len(ch.Points))
+			for k, p := range ch.Points {
+				np := p
+				np.Min, np.Max = cloneFloat(p.Min), cloneFloat(p.Max)
+				np.ValueList = append([]string(nil), p.ValueList...)
+				nc.Points[k] = np
+			}
+			nd.Channels[j] = nc
+		}
+		out.Devices[i] = nd
+	}
+	for i, v := range c.SysVars {
+		nv := v
+		nv.Min, nv.Max = cloneFloat(v.Min), cloneFloat(v.Max)
+		nv.ValueList = append([]string(nil), v.ValueList...)
+		out.SysVars[i] = nv
+	}
+	return out
+}

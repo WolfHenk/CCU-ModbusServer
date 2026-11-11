@@ -24,6 +24,7 @@ import (
 	"errors"
 	"math"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -262,5 +263,114 @@ func TestConcurrentWritersShareRateLimit(t *testing.T) {
 	wg.Wait()
 	if n := set.n(); n != 1 {
 		t.Fatalf("%d writes passed the rate limit concurrently", n)
+	}
+}
+
+// blockingSetter blocks the first SetValue until released.
+type blockingSetter struct {
+	fakeSetter
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (b *blockingSetter) SetValue(ctx context.Context, id int, t rega.Type, v float64) error {
+	b.once.Do(func() {
+		close(b.started)
+		<-b.release
+	})
+	return b.fakeSetter.SetValue(ctx, id, t, v)
+}
+
+// Regression W1: a change of the exports while a multi-write is running
+// stops the remaining values.
+func TestRevocationDuringMultiWrite(t *testing.T) {
+	e, _, _ := setupWrite(t)
+	allow, _ := ParseAllow([]string{"192.168.3.0/24"})
+	bs := &blockingSetter{fakeSetter: fakeSetter{err: map[int]error{}}, started: make(chan struct{}), release: make(chan struct{})}
+	e.SetWriter(bs, WriteConfig{Allow: allow, MinInterval: time.Hour})
+	done := make(chan error)
+	go func() { done <- e.WriteRegisters(allowed, 0, append(f32(22), 2)) }()
+	<-bs.started
+	// revoke write permission of the mode while the setpoint is being sent
+	m := e.Mapping()
+	if _, err := m.Add(mapping.Entry{Key: "dp:HmIP-RF.T1:1.SET_POINT_MODE", Kind: "dp", Type: rega.Enum, Format: mapping.Uint16}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.SetMapping(m); err != nil {
+		t.Fatal(err)
+	}
+	close(bs.release)
+	wantEx(t, <-done, modbus.ExServerDeviceFail)
+	if n := bs.n(); n != 1 {
+		t.Fatalf("%d values sent, only the first may have gone out", n)
+	}
+	l := e.WriteLog()
+	if last := l[len(l)-1]; last.Key != "dp:HmIP-RF.T1:1.SET_POINT_MODE" || !strings.HasPrefix(last.Result, "nicht ausgeführt") {
+		t.Fatalf("log %+v", last)
+	}
+}
+
+// Regression W2: the allow list is copied.
+func TestAllowListIsCopied(t *testing.T) {
+	e, _, set := setupWrite(t)
+	allow, _ := ParseAllow([]string{"192.168.3.50"})
+	e.SetWriter(set, WriteConfig{Allow: allow})
+	allow[0].IP = net.ParseIP("10.0.0.9").To16()
+	allow[0].Mask = net.CIDRMask(0, 128)
+	wantEx(t, e.WriteRegisters(stranger, 0, f32(21)), modbus.ExIllegalFunction)
+	if err := e.WriteRegisters(allowed, 0, f32(21)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Regression W2: changing the catalog after SetCatalog has no effect.
+func TestCatalogIsCopied(t *testing.T) {
+	e, _, set := setupWrite(t)
+	cat := writeCatalog()
+	e.SetCatalog(cat)
+	*cat.Devices[0].Channels[1].Points[0].Max = 1000
+	wantEx(t, e.WriteRegisters(allowed, 0, f32(500)), modbus.ExIllegalDataValue)
+	if set.n() != 0 {
+		t.Fatal("value sent")
+	}
+}
+
+// Regression W4: slots of values that were not executed are given back.
+func TestRejectedMultiWriteReleasesSlots(t *testing.T) {
+	e, _, set := setupWrite(t)
+	set.err[21] = rega.ErrRejected
+	wantEx(t, e.WriteRegisters(allowed, 0, append(f32(22), 1)), modbus.ExServerDeviceFail)
+	if set.n() != 1 {
+		t.Fatalf("calls %d", set.n())
+	}
+	// the mode was never sent: it must be writable immediately
+	if err := e.WriteRegisters(allowed, 2, []uint16{1}); err != nil {
+		t.Fatalf("slot of the unsent value still reserved: %v", err)
+	}
+	// the rejected setpoint itself keeps its slot (it was sent)
+	wantEx(t, e.WriteRegisters(allowed, 0, f32(23)), modbus.ExServerDeviceBusy)
+	found := false
+	for _, l := range e.WriteLog() {
+		if l.Result == "nicht ausgeführt: vorheriger Wert abgelehnt" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("unsent value not logged")
+	}
+}
+
+// Regression W3: no write without a known range.
+func TestNoWriteWithoutRange(t *testing.T) {
+	e, _, set := setupWrite(t)
+	cat := writeCatalog()
+	cat.Devices[0].Channels[1].Points[0].Max = nil
+	e.SetCatalog(cat)
+	// CheckFormat already orphans float32 without range? float32 for FLOAT
+	// needs no range, so the export stays; the write must be refused.
+	wantEx(t, e.WriteRegisters(allowed, 0, f32(21)), modbus.ExIllegalDataValue)
+	if set.n() != 0 {
+		t.Fatal("value sent")
 	}
 }

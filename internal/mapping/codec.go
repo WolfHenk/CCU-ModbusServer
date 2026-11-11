@@ -125,8 +125,11 @@ func CheckFormat(t rega.Type, f Format, scale float64, min, max *float64, listLe
 
 // CheckWriteValue is the central check of a value written by a Modbus
 // client, before anything is sent to the CCU. ReGa's State() does not
-// enforce MIN/MAX, so this check is the only range protection.
-func CheckWriteValue(t rega.Type, v float64, min, max *float64, listLen int) error {
+// enforce MIN/MAX, so this check is the only range protection. It is
+// conservative: numbers are only accepted when the CCU states a finite
+// MIN and MAX, and value list positions without a text are not
+// writable.
+func CheckWriteValue(t rega.Type, v float64, min, max *float64, list []string) error {
 	if math.IsNaN(v) || math.IsInf(v, 0) {
 		return fmt.Errorf("keine endliche Zahl")
 	}
@@ -137,8 +140,11 @@ func CheckWriteValue(t rega.Type, v float64, min, max *float64, listLen int) err
 		}
 		return nil
 	case rega.Enum:
-		if v != math.Trunc(v) || v < 0 || int(v) >= listLen {
-			return fmt.Errorf("Index %v außerhalb der Werteliste (0..%d)", v, listLen-1)
+		if v != math.Trunc(v) || v < 0 || int(v) >= len(list) {
+			return fmt.Errorf("Index %v außerhalb der Werteliste (0..%d)", v, len(list)-1)
+		}
+		if strings.TrimSpace(list[int(v)]) == "" {
+			return fmt.Errorf("Index %v ist in der Werteliste nicht belegt", v)
 		}
 		return nil
 	case rega.Integer:
@@ -149,13 +155,13 @@ func CheckWriteValue(t rega.Type, v float64, min, max *float64, listLen int) err
 	default:
 		return fmt.Errorf("Typ %s ist nicht schreibbar", t)
 	}
-	if (min != nil && !finite(min)) || (max != nil && !finite(max)) {
-		return fmt.Errorf("Wertebereich der CCU ungültig")
+	if !finite(min) || !finite(max) {
+		return fmt.Errorf("Wertebereich der CCU unbekannt: Schreiben nicht möglich")
 	}
-	if finite(min) && v < *min {
+	if v < *min {
 		return fmt.Errorf("%v unter Minimum %v", v, *min)
 	}
-	if finite(max) && v > *max {
+	if v > *max {
 		return fmt.Errorf("%v über Maximum %v", v, *max)
 	}
 	return nil

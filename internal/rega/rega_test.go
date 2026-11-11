@@ -277,3 +277,23 @@ func TestSetValue(t *testing.T) {
 		t.Errorf("aborted: %v", err)
 	}
 }
+
+func TestCatalogCloneIsDeep(t *testing.T) {
+	cat, err := parseCatalog(strings.Split(sampleOutput, "\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := cat.Clone()
+	*c.Devices[0].Channels[1].Points[2].Max = 99
+	c.Devices[0].Channels[1].Points[3].ValueList[0] = "X"
+	c.SysVars[0].Name = "Y"
+	c.Devices[0].Channels[1].Rooms[0] = "Z"
+	p := cat.Devices[0].Channels[1].Points
+	if *p[2].Max != 1 || p[3].ValueList[0] != "AUTO" || cat.SysVars[0].Name == "Y" || cat.Devices[0].Channels[1].Rooms[0] == "Z" {
+		t.Fatal("clone shares state")
+	}
+	var nilCat *Catalog
+	if nilCat.Clone() != nil {
+		t.Fatal("nil clone")
+	}
+}

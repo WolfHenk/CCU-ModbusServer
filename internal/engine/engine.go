@@ -59,6 +59,7 @@ type meta struct {
 	typ       rega.Type
 	min, max  *float64
 	listLen   int
+	list      []string
 	writable  bool // CCU allows writing
 	pointName string
 }
@@ -89,6 +90,7 @@ type Engine struct {
 	wsrc      ValueSetter
 	wcfg      WriteConfig
 	lastWrite map[string]time.Time
+	wgen      uint64 // changes with every rebuild and SetWriter
 	wlog      []LogEntry
 	started   time.Time
 }
@@ -140,6 +142,7 @@ func (e *Engine) Table() *table.Table {
 
 // SetCatalog resolves the entries against a new catalog.
 func (e *Engine) SetCatalog(cat *rega.Catalog) {
+	cat = cat.Clone() // the caller may keep and change its catalog
 	e.rebuildMu.Lock()
 	defer e.rebuildMu.Unlock()
 	e.mu.Lock()
@@ -197,7 +200,7 @@ func resolve(cat *rega.Catalog, en mapping.Entry) (int, meta, bool) {
 		for _, ch := range d.Channels {
 			for _, p := range ch.Points {
 				if mapping.KeyOfPoint(p) == en.Key {
-					return p.ReGaID, meta{typ: p.Type, min: p.Min, max: p.Max, listLen: len(p.ValueList), writable: p.Writable, pointName: p.ID}, true
+					return p.ReGaID, meta{typ: p.Type, min: p.Min, max: p.Max, listLen: len(p.ValueList), list: p.ValueList, writable: p.Writable, pointName: p.ID}, true
 				}
 			}
 		}
@@ -206,7 +209,7 @@ func resolve(cat *rega.Catalog, en mapping.Entry) (int, meta, bool) {
 }
 
 func svMeta(v *rega.SysVar) meta {
-	return meta{typ: v.Type, min: v.Min, max: v.Max, listLen: len(v.ValueList), writable: v.Writable, pointName: v.Name}
+	return meta{typ: v.Type, min: v.Min, max: v.Max, listLen: len(v.ValueList), list: v.ValueList, writable: v.Writable, pointName: v.Name}
 }
 
 // rebuild resolves all entries, rebuilds the table and the poll list.
@@ -261,6 +264,7 @@ func (e *Engine) rebuild() {
 	values, h := e.pol.Values()
 	e.fill(tab, objs, work.WordOrder, values, h, time.Now())
 	e.objs, e.byAddr, e.tab = objs, byAddr, tab
+	e.wgen++ // running writes must not continue with the old exports
 	keep := map[string]bool{}
 	for _, o := range objs {
 		keep[o.entry.Key] = true
