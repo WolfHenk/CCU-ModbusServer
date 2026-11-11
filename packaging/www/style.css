@@ -1,0 +1,35 @@
+/*
+ * -----------------------------------------------------------------------------
+ * Projekt:      CCU-ModbusServer
+ * Datei:        packaging/www/style.css
+ * Ersteller:    Wolfram Henkel
+ * Datum:        11. Nov. 2026
+ * Version:      0.1.0
+ *
+ * Copyright (c) 2026 Wolfram Henkel.
+ *
+ * Lizenz:       CCU-ModbusServer-Lizenz für kostenfreie Nutzung und
+ *               Weitergabe, Version 1.1.
+ *
+ * Private und gewerbliche Nutzung sind erlaubt.
+ * Die Software und Änderungen dürfen nur kostenlos unter
+ * derselben Lizenz und mit vollständigem Quellcode weitergegeben werden.
+ *
+ * Vollständiger Lizenztext: LICENSE
+ * -----------------------------------------------------------------------------
+ */
+body { font-family: Arial, Helvetica, sans-serif; margin: 0; background: #f2f3f5; color: #222; }
+.top { display: flex; align-items: center; gap: 16px; padding: 12px 20px; background: #fff; border-bottom: 3px solid #1f5fa8; }
+.logo { height: 48px; }
+h1 { margin: 0; font-size: 22px; }
+.sub { color: #555; font-size: 13px; }
+main { max-width: 900px; margin: 20px auto; padding: 0 16px; }
+.box { background: #fff; border: 1px solid #d5d8dc; border-radius: 6px; padding: 14px 18px; margin-bottom: 16px; }
+.empty { border-left: 5px solid #e0a800; }
+.muted { color: #666; font-size: 13px; }
+table { border-collapse: collapse; width: 100%; }
+th { text-align: left; width: 140px; padding: 6px 8px; color: #444; }
+td { padding: 6px 8px; }
+.ok { color: #1b7a2b; }
+.bad { color: #b42318; }
+.copyright { color: #777; font-size: 12px; text-align: center; margin: 24px 0; }

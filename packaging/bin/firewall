@@ -1,0 +1,168 @@
+#!/bin/tclsh
+# -----------------------------------------------------------------------------
+# Projekt:      CCU-ModbusServer
+# Datei:        packaging/bin/firewall
+# Ersteller:    Wolfram Henkel
+# Datum:        11. Nov. 2026
+# Version:      0.1.1
+#
+# Copyright (c) 2026 Wolfram Henkel.
+#
+# Lizenz:       CCU-ModbusServer-Lizenz für kostenfreie Nutzung und
+#               Weitergabe, Version 1.1.
+#
+# Private und gewerbliche Nutzung sind erlaubt.
+# Die Software und Änderungen dürfen nur kostenlos unter
+# derselben Lizenz und mit vollständigem Quellcode weitergegeben werden.
+#
+# Vollständiger Lizenztext: LICENSE
+# -----------------------------------------------------------------------------
+#
+# Opens or closes the Modbus port in the CCU firewall as a user port.
+#
+#   firewall open PORT    add PORT to USERPORTS (no-op if present)
+#   firewall close        remove the port this add-on added, if any
+#   firewall status       print the owned port, or nothing
+#
+# Uses the firewall library shipped with OpenCCU (/lib/libfirewall.tcl):
+# load configuration, change USERPORTS, save, apply. This is the same path
+# the WebUI firewall page takes; no OpenCCU file is modified other than
+# the firewall configuration itself.
+#
+# Ownership: a port that was already a user port before (set by the user
+# or another add-on) is never removed. The file OWNER records the port
+# only when this add-on added it.
+#
+# Exit codes: 0 ok, 1 usage/error, 2 firewall library not available
+# (the user must open the port manually).
+
+set lib /lib/libfirewall.tcl
+set cfgdir /usr/local/etc/config/addons/ccu-modbusserver
+if {[info exists ::env(CCU_MODBUSSERVER_TEST_DIR)]} {
+    # Testing only: library copy, configuration file and owner file in a
+    # test directory; the firewall rules are not applied.
+    set testdir $::env(CCU_MODBUSSERVER_TEST_DIR)
+    set lib $testdir/libfirewall.tcl
+    set cfgdir $testdir
+}
+set owner $cfgdir/firewall.owner
+
+proc usage {} {
+    puts stderr "usage: firewall open PORT | firewall close | firewall status"
+    exit 1
+}
+
+proc read_owner {} {
+    global owner
+    if {![file exists $owner]} { return "" }
+    set f [open $owner r]
+    set p [string trim [read $f]]
+    close $f
+    if {[string is integer -strict $p] && $p >= 1 && $p <= 65535} { return $p }
+    return ""
+}
+
+proc write_owner {p} {
+    global owner cfgdir
+    file mkdir $cfgdir
+    set tmp $owner.tmp
+    set f [open $tmp w]
+    puts $f $p
+    close $f
+    file rename -force -- $tmp $owner
+}
+
+proc apply {} {
+    if {[info exists ::env(CCU_MODBUSSERVER_TEST_DIR)] && [info exists ::env(CCU_MODBUSSERVER_TEST_FAIL_SAVE)]} {
+        error "simulated save failure (test)"
+    }
+    Firewall_saveConfiguration
+    if {![info exists ::env(CCU_MODBUSSERVER_TEST_DIR)]} {
+        Firewall_configureFirewall
+    }
+}
+
+set cmd [lindex $argv 0]
+if {$cmd eq "status"} {
+    puts [read_owner]
+    exit 0
+}
+if {$cmd ne "open" && $cmd ne "close"} { usage }
+if {$cmd eq "open"} {
+    if {$argc != 2} { usage }
+    set port [lindex $argv 1]
+    if {![string is integer -strict $port] || $port < 1 || $port > 65535} {
+        puts stderr "invalid port: $port"
+        exit 1
+    }
+} elseif {$argc != 1} { usage }
+
+if {![file readable $lib]} {
+    puts stderr "firewall library not found: $lib"
+    exit 2
+}
+if {[catch {
+    source $lib
+    if {[info exists ::env(CCU_MODBUSSERVER_TEST_DIR)]} {
+        set Firewall_CONFIG_FILE $testdir/firewall.conf
+    }
+    Firewall_setLoggingEnabled 1
+    Firewall_loadConfiguration
+} err]} {
+    puts stderr "firewall library failed: $err"
+    exit 2
+}
+
+set ports {}
+foreach p $Firewall_USER_PORTS {
+    set p [string trim $p]
+    if {$p ne ""} { lappend ports $p }
+}
+set owned [read_owner]
+
+if {$cmd eq "open"} {
+    set changed 0
+    if {$owned ne "" && $owned != $port} {
+        # Port changed: drop the port this add-on added before.
+        set i [lsearch -exact $ports $owned]
+        if {$i >= 0} {
+            set ports [lreplace $ports $i $i]
+            set changed 1
+        }
+        set owned ""
+    }
+    if {[lsearch -exact $ports $port] < 0} {
+        lappend ports $port
+        set changed 1
+        set owned $port
+    }
+    # A port that was already present and not added by us stays foreign:
+    # $owned is empty then and the owner file is removed.
+    if {$changed} {
+        set Firewall_USER_PORTS $ports
+        if {[catch { apply } err]} {
+            puts stderr "firewall update failed: $err"
+            exit 1
+        }
+    }
+    if {$owned ne ""} {
+        write_owner $owned
+    } else {
+        file delete -- $owner
+    }
+    exit 0
+}
+
+# close
+if {$owned eq ""} { exit 0 }
+set i [lsearch -exact $ports $owned]
+if {$i >= 0} {
+    set ports [lreplace $ports $i $i]
+    set Firewall_USER_PORTS $ports
+    if {[catch { apply } err]} {
+        puts stderr "firewall update failed: $err"
+        exit 1
+    }
+}
+file delete -- $owner
+exit 0

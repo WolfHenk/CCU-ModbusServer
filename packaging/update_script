@@ -1,0 +1,72 @@
+#!/bin/sh
+# -----------------------------------------------------------------------------
+# Projekt:      CCU-ModbusServer
+# Datei:        packaging/update_script
+# Ersteller:    Wolfram Henkel
+# Datum:        11. Nov. 2026
+# Version:      0.1.0
+#
+# Copyright (c) 2026 Wolfram Henkel.
+#
+# Lizenz:       CCU-ModbusServer-Lizenz für kostenfreie Nutzung und
+#               Weitergabe, Version 1.1.
+#
+# Private und gewerbliche Nutzung sind erlaubt.
+# Die Software und Änderungen dürfen nur kostenlos unter
+# derselben Lizenz und mit vollständigem Quellcode weitergegeben werden.
+#
+# Vollständiger Lizenztext: LICENSE
+# -----------------------------------------------------------------------------
+
+set -eu
+ADDON=ccu-modbusserver
+BASE=/usr/local/addons/$ADDON
+CFGDIR=/usr/local/etc/config/addons/$ADDON
+WEBDIR=/usr/local/etc/config/addons/www
+RCDIR=/usr/local/etc/config/rc.d
+[ -f VERSION ] && [ -f LICENSE ] && [ -f source/LICENSE ] && [ -f examples/config.json ] && [ -f rc.d/$ADDON ] && [ -x bin/update_addon ] && [ -x bin/firewall ] || exit 13
+case "$(uname -m)" in
+  aarch64|arm64) PLATFORM=arm64 ;;
+  armv7l) PLATFORM=arm ;;
+  x86_64|amd64) PLATFORM=amd64 ;;
+  *) echo "unsupported platform $(uname -m)" >&2; exit 13 ;;
+esac
+SRC=bin/linux-$PLATFORM/ccu-modbusserverd
+[ -f "$SRC" ] && [ -f www/index.cgi ] || exit 13
+if [ -d "$WEBDIR/$ADDON" ] && [ ! -L "$WEBDIR/$ADDON" ]; then
+  echo 'Refusing to replace existing non-symlink web directory' >&2
+  exit 14
+fi
+if [ -f "$RCDIR/$ADDON" ]; then
+  RESULT=0
+  "$RCDIR/$ADDON" stop || exit 14
+else
+  RESULT=10
+fi
+mkdir -p "$BASE/bin" "$BASE/www/img" "$BASE/lib" "$BASE/source" "$CFGDIR" "$WEBDIR" "$RCDIR"
+cp "$SRC" "$BASE/bin/ccu-modbusserverd"
+cp -f bin/update_addon bin/firewall "$BASE/bin/"
+cp -f www/*.cgi www/*.css "$BASE/www/"
+cp -f www/img/modbus-logo*.png "$BASE/www/img/"
+cp -f lib/session.tcl "$BASE/lib/"
+cp -f VERSION LICENSE "$BASE/"
+cp -R source/. "$BASE/source/"
+# The add-on manager may run this with umask 077: set modes explicitly.
+chmod 755 "$BASE" "$BASE/bin" "$BASE/www" "$BASE/www/img" "$BASE/lib" "$BASE/source"
+chmod 755 "$BASE/bin/"* "$BASE/www/"*.cgi
+chmod 644 "$BASE/VERSION" "$BASE/LICENSE" "$BASE/lib/session.tcl" "$BASE/www/"*.css "$BASE/www/img/"*.png
+chmod -R a+rX "$BASE/source"
+cp -f rc.d/$ADDON "$RCDIR/$ADDON"
+chmod 755 "$RCDIR/$ADDON"
+if [ ! -f "$CFGDIR/config.json" ]; then
+  cp examples/config.json "$CFGDIR/config.json"
+  chmod 600 "$CFGDIR/config.json"
+fi
+ln -sfn "$BASE/www" "$WEBDIR/$ADDON"
+touch /usr/local/etc/config/hm_addons.cfg
+"$BASE/bin/update_addon" "$ADDON" "/addons/$ADDON/index.cgi" "CCU-ModbusServer" "Modbus TCP Server" "Modbus TCP Server" || exit 14
+sync
+if [ "$RESULT" -eq 0 ] && [ ! -f /etc/init.d/S00InstallAddon ]; then
+  "$RCDIR/$ADDON" start || exit 14
+fi
+exit "$RESULT"

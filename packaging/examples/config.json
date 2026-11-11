@@ -1,0 +1,6 @@
+{
+  "schema": 1,
+  "port": 502,
+  "only_unit_id": null,
+  "max_connections": 16
+}

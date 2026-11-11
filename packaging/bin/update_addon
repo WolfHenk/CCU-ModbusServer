@@ -1,0 +1,96 @@
+#!/usr/bin/env tclsh
+# -----------------------------------------------------------------------------
+# Projekt:      CCU-ModbusServer
+# Datei:        packaging/bin/update_addon
+# Ersteller:    Wolfram Henkel
+# Datum:        11. Nov. 2026
+# Version:      0.1.0
+#
+# Copyright (c) 2026 Wolfram Henkel.
+#
+# Lizenz:       CCU-ModbusServer-Lizenz für kostenfreie Nutzung und
+#               Weitergabe, Version 1.1.
+#
+# Private und gewerbliche Nutzung sind erlaubt.
+# Die Software und Änderungen dürfen nur kostenlos unter
+# derselben Lizenz und mit vollständigem Quellcode weitergegeben werden.
+#
+# Vollständiger Lizenztext: LICENSE
+# -----------------------------------------------------------------------------
+
+# Register CCU-ModbusServer in the native Homematic Systemsteuerung menu.
+# Usage: update_addon ID CONFIG_URL NAME DESCRIPTION_EN DESCRIPTION_DE
+#        update_addon delete ID
+# Only the matching add-on ID is changed; unrelated entries are preserved.
+
+set cfg "/usr/local/etc/config/hm_addons.cfg"
+if {[info exists ::env(CCU_MODBUSSERVER_HM_ADDONS_CFG)]} {
+    # Testing only; normal installations use the fixed CCU config location.
+    set cfg $::env(CCU_MODBUSSERVER_HM_ADDONS_CFG)
+}
+
+if {$argc == 2 && [lindex $argv 0] eq "delete"} {
+    set remove 1
+    set id [lindex $argv 1]
+} elseif {$argc == 5} {
+    set remove 0
+    foreach {id url name description_en description_de} $argv break
+} else {
+    puts stderr "usage: update_addon ID URL NAME DESCRIPTION_EN DESCRIPTION_DE | update_addon delete ID"
+    exit 1
+}
+
+if {![regexp {^[a-z0-9-]+$} $id]} {
+    puts stderr "invalid add-on ID"
+    exit 1
+}
+
+if {[file exists $cfg]} {
+    set handle [open $cfg r]
+    fconfigure $handle -encoding utf-8 -translation binary
+    set original [read $handle]
+    close $handle
+} else {
+    set original ""
+}
+
+# hm_addons.cfg is a Tcl list of alternating addon IDs and property lists.
+# An invalid file must not be silently replaced or truncated.
+if {[catch {array set installed $original} err]} {
+    puts stderr "invalid hm_addons.cfg: $err"
+    exit 1
+}
+
+if {$remove} {
+    if {![info exists installed($id)]} {exit 0}
+    unset installed($id)
+} else {
+    set description [list en [list "<li>$description_en</li>"] de [list "<li>$description_de</li>"]]
+    set entry [list ID $id CONFIG_NAME $name CONFIG_URL $url CONFIG_DESCRIPTION $description]
+    if {[info exists installed($id)] && $installed($id) eq $entry} {exit 0}
+    set installed($id) $entry
+}
+
+# Preserve unrelated key/value pairs; append to the old file when adding a
+# new entry so existing add-ons retain even their original byte layout.
+if {!$remove && [lsearch -exact $original $id] < 0} {
+    set contents "${original}\n[list $id $installed($id)]"
+} else {
+    set contents [array get installed]
+}
+
+set tmp "${cfg}.[pid].tmp"
+if {[catch {
+    set handle [open $tmp w]
+    fconfigure $handle -encoding utf-8 -translation binary
+    puts -nonewline $handle $contents
+    close $handle
+    file attributes $tmp -permissions 0644
+    file rename -force -- $tmp $cfg
+} err]} {
+    catch {close $handle}
+    catch {file delete -- $tmp}
+    puts stderr "could not update hm_addons.cfg: $err"
+    exit 1
+}
+exit 0

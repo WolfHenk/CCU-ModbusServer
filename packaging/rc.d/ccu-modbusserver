@@ -1,0 +1,127 @@
+#!/bin/sh
+# -----------------------------------------------------------------------------
+# Projekt:      CCU-ModbusServer
+# Datei:        packaging/rc.d/ccu-modbusserver
+# Ersteller:    Wolfram Henkel
+# Datum:        11. Nov. 2026
+# Version:      0.1.1
+#
+# Copyright (c) 2026 Wolfram Henkel.
+#
+# Lizenz:       CCU-ModbusServer-Lizenz für kostenfreie Nutzung und
+#               Weitergabe, Version 1.1.
+#
+# Private und gewerbliche Nutzung sind erlaubt.
+# Die Software und Änderungen dürfen nur kostenlos unter
+# derselben Lizenz und mit vollständigem Quellcode weitergegeben werden.
+#
+# Vollständiger Lizenztext: LICENSE
+# -----------------------------------------------------------------------------
+
+ADDON=ccu-modbusserver
+BASE=/usr/local/addons/$ADDON
+CFGDIR=/usr/local/etc/config/addons/$ADDON
+CONF=$CFGDIR/config.json
+PIDFILE=/var/run/$ADDON.pid
+LOG=/var/log/$ADDON.log
+
+running() {
+  [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null
+}
+
+case "$1" in
+  # The OpenCCU add-on page calls info.<language> AND info and joins the
+  # fields; emitting everything twice would duplicate the table row.
+  info.de|info.en)
+    ;;
+  info)
+    echo 'Name: CCU-ModbusServer'
+    echo "Version: $(cat "$BASE/VERSION" 2>/dev/null)"
+    echo "Info: <div style='text-align:center'>"
+    echo "Info: <img src='/addons/ccu-modbusserver/img/modbus-logo.png' style='max-width:235px;max-height:70px;margin:2px 0 5px 0' alt='Modbus'><br>"
+    echo "Info: <b>CCU-ModbusServer $(cat "$BASE/VERSION" 2>/dev/null)</b><br>"
+    echo 'Info: Modbus-TCP-Server fuer CCU/OpenCCU<br>'
+    echo 'Info: </div>'
+    echo 'Config-Url: /addons/ccu-modbusserver/index.cgi'
+    echo 'Operations: restart uninstall'
+    ;;
+  init)
+    ;;
+  start)
+    [ -x "$BASE/bin/ccu-modbusserverd" ] || exit 1
+    [ -f "$CONF" ] || exit 1
+    running && exit 0
+    rm -f "$PIDFILE"
+    log() { echo "$(date '+%Y/%m/%d %H:%M:%S') rc.d: $*" >>"$LOG"; }
+    # 1. Configuration and port: the daemon's own parser decides; the
+    #    port must be free. Nothing is changed before this succeeds.
+    PORT=$("$BASE/bin/ccu-modbusserverd" -config "$CONF" -print-port 2>>"$LOG") || { log "Konfiguration ungueltig"; exit 1; }
+    "$BASE/bin/ccu-modbusserverd" -config "$CONF" -check >>"$LOG" 2>&1 || { log "Start abgebrochen (Port $PORT)"; exit 1; }
+    # 2. Firewall. Exit 2 = no firewall library: run anyway, the WebUI
+    #    asks the user to open the port by hand. Exit 1 = update failed.
+    OWNED_BEFORE=$("$BASE/bin/firewall" status 2>/dev/null)
+    "$BASE/bin/firewall" open "$PORT" >>"$LOG" 2>&1
+    FW=$?
+    if [ $FW -eq 1 ]; then
+      log "Firewall-Freigabe fuer Port $PORT fehlgeschlagen; Start abgebrochen"
+      exit 1
+    elif [ $FW -eq 2 ]; then
+      log "Firewall-Bibliothek fehlt: Port $PORT bitte manuell freigeben"
+    fi
+    # 3. Start and wait until the server answers on the port.
+    "$BASE/bin/ccu-modbusserverd" -config "$CONF" >>"$LOG" 2>&1 &
+    PID=$!
+    i=0
+    while [ $i -lt 10 ]; do
+      sleep 1
+      kill -0 "$PID" 2>/dev/null || break
+      if "$BASE/bin/ccu-modbusserverd" -config "$CONF" -probe >/dev/null 2>&1; then
+        echo "$PID" > "$PIDFILE"
+        log "gestartet, PID $PID, Port $PORT"
+        exit 0
+      fi
+      i=$((i+1))
+    done
+    kill "$PID" 2>/dev/null
+    log "Server antwortet nicht auf Port $PORT; Start abgebrochen"
+    # Roll back only a firewall entry made by THIS start; an entry that
+    # existed before (same port) is kept.
+    if [ $FW -eq 0 ] && [ "$("$BASE/bin/firewall" status 2>/dev/null)" != "$OWNED_BEFORE" ]; then
+      "$BASE/bin/firewall" close >>"$LOG" 2>&1
+    fi
+    exit 1
+    ;;
+  stop)
+    if [ -f "$PIDFILE" ]; then
+      kill "$(cat "$PIDFILE")" 2>/dev/null || true
+      rm -f "$PIDFILE"
+    fi
+    i=0
+    while [ -n "$(pidof ccu-modbusserverd)" ] && [ $i -lt 10 ]; do sleep 1; i=$((i+1)); done
+    ;;
+  restart)
+    "$0" stop
+    "$0" start
+    ;;
+  uninstall)
+    # Removal leaves nothing behind: firewall port (only if this add-on
+    # added it), add-on menu entry, web link, files, configuration, log.
+    "$0" stop
+    [ -n "$(pidof ccu-modbusserverd)" ] && exit 1
+    if [ -x "$BASE/bin/firewall" ]; then
+      "$BASE/bin/firewall" close
+      [ $? -eq 1 ] && exit 1
+    fi
+    if [ -x "$BASE/bin/update_addon" ]; then
+      "$BASE/bin/update_addon" delete "$ADDON" || exit 1
+    fi
+    rm -f /usr/local/etc/config/addons/www/$ADDON
+    rm -rf "$BASE" "$CFGDIR"
+    rm -f "$PIDFILE" "$LOG"
+    ;;
+  *)
+    echo "usage: $0 {start|stop|restart|info|uninstall}" >&2
+    exit 1
+    ;;
+esac
+exit 0

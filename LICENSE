@@ -1,0 +1,346 @@
+# CCU-ModbusServer – Lizenz für kostenfreie Nutzung und Weitergabe
+
+Version 1.1
+
+Lizenzgeber: Wolfram Henkel
+Software: CCU-ModbusServer
+Copyright © 2026 Wolfram Henkel. Alle Rechte vorbehalten, soweit sie nicht durch diese Lizenz eingeräumt werden.
+
+## Präambel
+
+CCU-ModbusServer wurde entwickelt, um die Nutzung des Modbus-Protokolls in Verbindung mit CCU- und OpenCCU-Systemen zu ermöglichen.
+
+Der Lizenzgeber möchte diese Software der Allgemeinheit dauerhaft zur kostenlosen Nutzung zur Verfügung stellen.
+
+Die Software darf ausdrücklich auch in Unternehmen, gewerblichen Anlagen und im Rahmen beruflicher Tätigkeiten eingesetzt werden.
+
+Der Lizenzgeber gestattet außerdem die Veränderung, Weiterentwicklung und kostenlose Weitergabe der Software. Dabei soll sichergestellt werden, dass die Software selbst und sämtliche unter diese Lizenz fallenden Weiterentwicklungen kostenlos bleiben.
+
+Eine wirtschaftliche Verwertung der Software durch ihren Verkauf, durch Lizenzgebühren oder durch vergleichbare Entgelte ist nicht gestattet.
+
+Die entgeltliche Erbringung eigenständiger Arbeitsleistungen sowie der Verkauf von Hardware bleiben ausdrücklich erlaubt.
+
+Die folgenden Bestimmungen regeln die entsprechenden Rechte und Pflichten.
+
+## § 1 – Gegenstand und Geltungsbereich
+
+(1) Diese Lizenz gilt für das Computerprogramm CCU-ModbusServer einschließlich seines vom Lizenzgeber unter dieser Lizenz veröffentlichten Quellcodes, seiner ausführbaren Programmdateien, Skripte und sonstigen zur Software gehörenden Bestandteile.
+
+(2) Sie gilt ebenfalls für Änderungen, Erweiterungen, Bearbeitungen und abgeleitete Fassungen, soweit diese nach Maßgabe der folgenden Bestimmungen unter diese Lizenz fallen.
+
+(3) Als Software werden nachfolgend alle von dieser Lizenz erfassten Bestandteile bezeichnet.
+
+(4) Die Lizenz gilt ausschließlich für Bestandteile, an denen der Lizenzgeber die zur Einräumung der Nutzungsrechte erforderlichen Rechte besitzt oder deren Nutzung unter diesen Bedingungen rechtmäßig gestatten darf.
+
+(5) Eigenständige Bestandteile Dritter, die unter anderen Lizenzen stehen, bleiben ihren jeweiligen Lizenzbedingungen unterworfen. Dies gilt insbesondere für verwendete Bibliotheken, Werkzeuge, Grafiken und sonstige Fremdleistungen.
+
+(6) Diese Lizenz überträgt kein Eigentum an Urheberrechten oder sonstigen Schutzrechten.
+
+## § 2 – Einräumung von Nutzungsrechten
+
+(1) Der Lizenzgeber räumt jedem Empfänger der Software im Rahmen seiner verfügbaren Rechte ein einfaches, nicht ausschließliches, weltweites und unentgeltliches Nutzungsrecht ein.
+
+(2) Dieses Nutzungsrecht umfasst insbesondere:
+
+a) das Herunterladen und Speichern der Software;
+b) ihre Installation und Ausführung auf beliebig vielen geeigneten Geräten;
+c) die private, berufliche, betriebliche und sonstige gewerbliche Nutzung;
+d) die Untersuchung und Überprüfung des Quellcodes;
+e) die Veränderung, Anpassung und Weiterentwicklung der Software;
+f) die Herstellung ausführbarer Programme aus dem Quellcode;
+g) die Vervielfältigung und kostenlose Weitergabe unveränderter oder veränderter Fassungen nach Maßgabe dieser Lizenz.
+
+(3) Eine besondere Genehmigung für die Nutzung in Unternehmen oder für gewerbliche Zwecke ist nicht erforderlich.
+
+(4) Die eingeräumten Rechte gelten für die Dauer der gesetzlichen Schutzrechte, solange die Lizenzbedingungen eingehalten werden.
+
+(5) Gesetzlich zulässige Nutzungen bleiben unabhängig von dieser Lizenz unberührt.
+
+## § 3 – Grundsatz der Kostenfreiheit
+
+(1) Die Software selbst ist kostenlos.
+
+(2) Die Weitergabe der Software ist ausschließlich unentgeltlich gestattet. Dies gilt unabhängig davon, ob die Software
+
+a) unverändert oder verändert,
+b) als Quellcode oder ausführbares Programm,
+c) einzeln oder zusammen mit anderen Programmen,
+d) auf einem Datenträger, über das Internet oder auf anderem Wege,
+e) zusammen mit Hardware oder im Rahmen einer Dienstleistung
+
+weitergegeben wird.
+
+(3) Für die Software selbst dürfen insbesondere keine folgenden Entgelte verlangt werden:
+
+a) Kaufpreise;
+b) Lizenz- oder Nutzungsgebühren;
+c) Freischaltgebühren;
+d) Abonnementgebühren für die Bereitstellung oder Nutzung der Software;
+e) Gebühren für den Download oder die Überlassung des Quellcodes;
+f) Gebühren für den Zugang zu unveränderten oder veränderten Programmfassungen;
+g) gesonderte Entgelte für Programmänderungen, soweit diese als kostenpflichtige Softwarelizenzen oder kostenpflichtige Softwareüberlassung angeboten werden.
+
+(4) Das Verbot gilt auch für indirekte Entgelte. Insbesondere ist es nicht gestattet, den Preis anderer Produkte oder Leistungen wegen der Überlassung der Software zu erhöhen.
+
+(5) Die Software darf nicht dadurch kostenpflichtig gemacht werden, dass sie ausschließlich zusammen mit einem kostenpflichtigen Produkt erhältlich ist. Wer die Software zusammen mit Hardware oder anderen Leistungen weitergibt, muss den Empfänger auf eine kostenlose Bezugsquelle der Software hinweisen; der Bezug der Software darf nicht vom Erwerb der Hardware oder Leistung abhängig gemacht werden.
+
+(6) Die kostenfreie Bereitstellung darf nicht von einer Zahlung, einem kostenpflichtigen Abonnement oder dem Erwerb einer anderen Ware oder Leistung abhängig gemacht werden.
+
+(7) Unberührt bleiben gesetzlich zwingende Bestimmungen, insbesondere zur Erschöpfung von Verbreitungsrechten.
+
+## § 4 – Zulässige gewerbliche Tätigkeiten
+
+(1) Die Nutzung der Software im Rahmen einer gewerblichen oder beruflichen Tätigkeit ist uneingeschränkt gestattet, soweit die übrigen Lizenzbedingungen eingehalten werden.
+
+(2) Insbesondere dürfen Unternehmen und Selbstständige mit der Software Anlagen betreiben, Messwerte erfassen, Geräte steuern, Dienstleistungen erbringen und wirtschaftliche Ergebnisse erzielen.
+
+(3) Für eigenständige Arbeitsleistungen dürfen angemessene und marktübliche Entgelte berechnet werden. Dazu gehören insbesondere:
+
+a) Elektroinstallationen;
+b) Montagearbeiten;
+c) Einrichtung und Konfiguration;
+d) Integration in bestehende Anlagen;
+e) Erstellung kundenspezifischer Einstellungen;
+f) Schulung und Einweisung;
+g) technische Wartung;
+h) Fehlersuche und Fehlerbehebung;
+i) Beratung und Support;
+j) die Arbeitsleistung bei der Entwicklung von Änderungen oder Erweiterungen.
+
+(4) Die Vergütung solcher Arbeitsleistungen begründet kein Recht, die Software oder ihre veränderten Fassungen kostenpflichtig weiterzugeben. Wer eine veränderte Programmfassung im Rahmen einer bezahlten Arbeitsleistung an einen Auftraggeber überlässt, muss die betreffende Fassung einschließlich ihres nach dieser Lizenz erforderlichen Quellcodes kostenlos unter dieser Lizenz überlassen.
+
+(5) Der Verkauf von Hardware ist gestattet. Für Hardware dürfen marktübliche Preise verlangt werden. Ein Aufschlag wegen der mitgelieferten Software ist unzulässig.
+
+(6) Die Kosten für Arbeitsleistungen und Hardware müssen sachlich von der kostenlos überlassenen Software unterscheidbar sein. Bei einer Rechnung, die Software und andere Leistungen gemeinsam betrifft, darf für die Überlassung oder Lizenzierung von CCU-ModbusServer kein Entgelt angesetzt werden.
+
+(7) Es ist ausdrücklich gestattet, durch die betriebliche Nutzung der Software Gewinne zu erzielen. Verboten ist ausschließlich eine entgeltliche Verwertung der Software entgegen dieser Lizenz.
+
+## § 5 – Veränderung und Weiterentwicklung
+
+(1) Jeder Lizenznehmer darf die Software verändern, anpassen und erweitern.
+
+(2) Änderungen dürfen insbesondere dazu dienen,
+
+a) Fehler zu beseitigen;
+b) neue Geräte oder Protokollfunktionen zu unterstützen;
+c) zusätzliche Bedienungsmöglichkeiten zu schaffen;
+d) die Software an andere Betriebssysteme oder Hardwareplattformen anzupassen;
+e) die Leistungsfähigkeit oder Sicherheit zu verbessern;
+f) die Software an besondere betriebliche Anforderungen anzupassen.
+
+(3) Solange Änderungen ausschließlich intern verwendet und nicht an Dritte weitergegeben werden, besteht grundsätzlich keine Verpflichtung, diese Änderungen zu veröffentlichen. § 8 bleibt unberührt.
+
+(4) Werden veränderte Fassungen weitergegeben, gelten die besonderen Pflichten der §§ 6 und 7.
+
+## § 6 – Weitergabe veränderter Fassungen unter gleichen Bedingungen
+
+(1) Jede Weitergabe einer veränderten oder abgeleiteten Fassung der Software darf ausschließlich unter dieser Lizenz erfolgen.
+
+(2) Dies gilt für den ursprünglichen Quellcode und sämtliche Änderungen daran.
+
+(3) Neu geschaffene Quelldateien, die als eigene Bestandteile einer abgeleiteten Fassung funktional in CCU-ModbusServer integriert und zusammen mit dieser Fassung weitergegeben werden, müssen ebenfalls unter dieser Lizenz bereitgestellt werden, soweit der Weitergebende die dafür erforderlichen Rechte besitzt.
+
+(4) Es ist nicht gestattet, die von dieser Lizenz erfassten Teile einer veränderten Fassung
+
+a) unter eine restriktivere Lizenz zu stellen;
+b) ausschließlich als geschlossenen Quellcode anzubieten;
+c) mit zusätzlichen Lizenzgebühren zu versehen;
+d) mit Weitergabeverboten zu belegen;
+e) mit Bedingungen zu versehen, die den Empfängern die nach dieser Lizenz eingeräumten Rechte nehmen oder einschränken.
+
+(5) An eigenen Änderungen verbleiben dem jeweiligen Bearbeiter seine gesetzlichen Urheber- und sonstigen Schutzrechte. Mit der Weitergabe unter dieser Lizenz räumt der Bearbeiter den Empfängern jedoch an seinen eigenen, von dieser Lizenz erfassten Beiträgen die in § 2 beschriebenen Nutzungsrechte unmittelbar und unentgeltlich ein.
+
+(6) Der Lizenzgeber beansprucht durch diese Bestimmung keine Urheberrechte an fremden schöpferischen Leistungen.
+
+(7) Eigenständige Programme, die lediglich über allgemein verwendbare oder dokumentierte Schnittstellen mit CCU-ModbusServer kommunizieren und keine Bearbeitung oder abgeleitete Fassung der Software darstellen, werden durch diese Lizenz nicht automatisch erfasst.
+
+(8) Die bloße Zusammenstellung mit unabhängig lizenzierten Programmen auf einem gemeinsamen Datenträger oder in einem gemeinsamen Vertriebspaket führt nicht automatisch dazu, dass diese unabhängigen Programme dieser Lizenz unterliegen.
+
+(9) Können die Rechte an fremden Bestandteilen nicht mit diesen Bedingungen vereinbart werden, darf die entsprechende Kombination nicht unter Verletzung der Rechte Dritter weitergegeben werden.
+
+## § 6a – Beiträge an den Lizenzgeber
+
+(1) Wer dem Lizenzgeber Änderungen, Erweiterungen oder sonstige Beiträge zur Aufnahme in CCU-ModbusServer übermittelt, räumt dem Lizenzgeber daran unentgeltlich die in § 2 beschriebenen Nutzungsrechte ein.
+
+(2) Der Lizenzgeber darf solche Beiträge unter dieser Lizenz oder unter einer späteren vom Lizenzgeber veröffentlichten Fassung dieser Lizenz veröffentlichen.
+
+(3) Der Übermittelnde versichert, dass er die hierfür erforderlichen Rechte an seinem Beitrag besitzt. Beiträge, die Rechte Dritter enthalten, sind als solche zu kennzeichnen.
+
+(4) Ein Anspruch auf Aufnahme eines Beitrags besteht nicht.
+
+## § 7 – Pflicht zur Bereitstellung des Quellcodes
+
+(1) Wer die Software oder eine veränderte Fassung an Dritte weitergibt, muss den vollständigen zugehörigen Quellcode kostenlos zugänglich machen.
+
+(2) Diese Pflicht besteht auch dann, wenn ausschließlich eine ausführbare Programmdatei weitergegeben wird.
+
+(3) Der Quellcode muss in einer Form bereitgestellt werden, die seine Prüfung, Veränderung und erneute Übersetzung ermöglicht. Dazu gehören, soweit für den betreffenden Programmstand erforderlich:
+
+a) alle von dieser Lizenz erfassten Quellcodedateien;
+b) die zugehörigen Konfigurationsvorlagen;
+c) die erforderlichen Build-Skripte;
+d) Angaben zu verwendeten Abhängigkeiten und deren Versionen;
+e) die zur Erstellung der ausführbaren Programme erforderlichen Anleitungen;
+f) die Lizenzbedingungen;
+g) die erforderlichen Hinweise zu Rechten Dritter.
+
+(4) Persönliche Zugangsdaten, Passwörter, private Schlüssel und sonstige Geheimnisse müssen nicht offengelegt werden. Soweit erforderlich, sind geeignete Konfigurationsvorlagen ohne geheime Inhalte bereitzustellen.
+
+(5) Die Bereitstellung kann durch Beifügung des Quellcodes oder durch einen unmittelbar zugänglichen, kostenlosen Download erfolgen.
+
+(6) Der Quellcode muss spätestens zum Zeitpunkt der Weitergabe des ausführbaren Programms verfügbar sein.
+
+(7) Wird der Quellcode über eine Internetadresse bereitgestellt, muss er dort für die Dauer der öffentlichen Bereitstellung der betreffenden Programmfassung und mindestens drei Jahre nach deren letzter Weitergabe durch den betreffenden Anbieter kostenlos erhältlich bleiben.
+
+(8) Die Bereitstellung darf nicht an eine Zahlung, eine kostenpflichtige Mitgliedschaft oder den Erwerb weiterer Leistungen gebunden werden.
+
+(9) Die Verpflichtung zur Bereitstellung von Quellcode erstreckt sich nicht auf eigenständige Drittsoftware, soweit deren eigene Lizenzbedingungen etwas anderes vorsehen. Entsprechende Lizenz- und Bezugshinweise sind jedoch zu beachten.
+
+## § 8 – Bereitstellung über Netzwerke
+
+(1) Die Nutzung der Software als internes Werkzeug eines Unternehmens oder einer sonstigen Organisation ist erlaubt und begründet für sich allein keine Veröffentlichungspflicht.
+
+(2) Wird Dritten dagegen der unmittelbare Zugang zu wesentlichen Funktionen von CCU-ModbusServer als eigenständiger Softwaredienst angeboten, darf für diesen Softwarezugang kein Entgelt verlangt werden.
+
+(3) Entgelte für eigenständige menschliche Arbeitsleistungen und unabhängig davon erbrachte Dienstleistungen bleiben nach Maßgabe des § 4 zulässig.
+
+(4) Wer eine veränderte Fassung von CCU-ModbusServer Dritten über ein Netzwerk als Softwaredienst unmittelbar zur Nutzung bereitstellt, muss diesen Nutzern den vollständigen Quellcode der betriebenen Fassung kostenlos zugänglich machen.
+
+(5) Die Quellcodebereitstellung hat über einen leicht auffindbaren Hinweis innerhalb des Dienstes oder über eine eindeutig bezeichnete Internetadresse zu erfolgen.
+
+## § 9 – Urhebervermerke und Kennzeichnung von Änderungen
+
+(1) Bestehende Urheberrechtsvermerke dürfen nicht entfernt oder verfälscht werden.
+
+(2) Bei jeder Weitergabe müssen die vollständigen Lizenzbedingungen beigefügt oder in unmittelbar zugänglicher Form bereitgestellt werden.
+
+(3) Änderungen an der Software sind nachvollziehbar zu kennzeichnen. Dabei müssen angegeben werden:
+
+a) die geänderten Dateien oder wesentlichen Programmteile;
+b) das Datum der Änderung, soweit bekannt.
+
+Dabei sollen außerdem angegeben werden:
+
+c) Art und Umfang der Änderungen;
+d) der Bearbeiter oder die verantwortliche Stelle, soweit diese Angabe rechtlich zulässig und tatsächlich zutreffend ist.
+
+(4) Die Nennung eines Bearbeiters begründet keine Übertragung der ursprünglichen Urheberrechte.
+
+(5) Bei der Weitergabe veränderter Fassungen darf nicht der Eindruck erweckt werden, die Änderungen seien vom ursprünglichen Lizenzgeber entwickelt, überprüft oder freigegeben worden, wenn dies nicht zutrifft.
+
+(6) Die Software und ihre abgeleiteten Fassungen müssen weiterhin einen eindeutigen Verweis auf diese Lizenz enthalten.
+
+(7) Zusätzliche Urhebervermerke für eigene schöpferische Beiträge sind zulässig, sofern sie die ursprünglichen Angaben nicht verdrängen oder verfälschen.
+
+## § 10 – Rechte Dritter und Kennzeichen
+
+(1) Rechte Dritter bleiben von dieser Lizenz unberührt.
+
+(2) Dies gilt insbesondere für
+
+a) fremde Softwarebibliotheken;
+b) Bestandteile der Go-Standardbibliothek und anderer Entwicklungswerkzeuge;
+c) fremde Grafiken und Abbildungen;
+d) Marken, Logos und Produktbezeichnungen;
+e) Patente und sonstige gewerbliche Schutzrechte, soweit sie nicht ausdrücklich lizenziert werden.
+
+(3) Insbesondere begründet diese Lizenz keine Rechte an der Bezeichnung oder dem Logo „Modbus“, soweit diese Dritten zustehen.
+
+(4) Entsprechendes gilt für fremde Marken wie „HomeMatic“, „CCU“, „OpenCCU“ und sonstige Produktkennzeichen.
+
+(5) Die sachlich zutreffende Beschreibung der Kompatibilität mit fremden Produkten oder Protokollen bleibt im gesetzlich zulässigen Umfang unberührt.
+
+(6) Die in der Software enthaltenen Hinweise auf Drittanbieter und deren Lizenzbedingungen müssen bei einer Weitergabe erhalten bleiben.
+
+(7) Diese Lizenz darf nicht dahingehend ausgelegt werden, dass der Lizenzgeber über Rechte Dritter verfügen könnte.
+
+## § 11 – Gewährleistung
+
+(1) Die Software wird unentgeltlich und in dem Zustand zur Verfügung gestellt, in dem sie sich zum Zeitpunkt ihrer Überlassung befindet.
+
+(2) Der Lizenzgeber übernimmt keine Garantie für
+
+a) die Fehlerfreiheit der Software;
+b) ihre ununterbrochene Verfügbarkeit;
+c) ihre Eignung für einen bestimmten Einsatzzweck;
+d) die Kompatibilität mit bestimmter Hardware;
+e) die Richtigkeit erfasster Messwerte;
+f) die fehlerfreie Steuerung angeschlossener Geräte;
+g) die dauerhafte Verfügbarkeit von Updates oder Support.
+
+(3) Eine bestimmte Beschaffenheit wird nur dann garantiert, wenn der Lizenzgeber sie ausdrücklich und eindeutig als Garantie zugesagt hat.
+
+(4) Gesetzlich zwingende Gewährleistungsrechte bleiben unberührt.
+
+## § 12 – Haftung
+
+(1) Der Lizenzgeber haftet nach den gesetzlichen Vorschriften für Schäden, die vorsätzlich oder grob fahrlässig verursacht wurden.
+
+(2) Die Haftung für Schäden aus der Verletzung des Lebens, des Körpers oder der Gesundheit bleibt nach Maßgabe der gesetzlichen Vorschriften unbeschränkt.
+
+(3) Gleiches gilt für Ansprüche aus ausdrücklich übernommenen Garantien, wegen arglistig verschwiegener Mängel sowie aufgrund zwingender gesetzlicher Haftungsvorschriften, insbesondere nach dem Produkthaftungsgesetz.
+
+(4) Im Übrigen ist die Haftung bei leichter Fahrlässigkeit ausgeschlossen, soweit dies gesetzlich zulässig ist.
+
+(5) Soweit die Haftung für die leicht fahrlässige Verletzung wesentlicher Vertragspflichten gesetzlich nicht ausgeschlossen werden kann, ist sie auf den bei Vertragsschluss typischerweise vorhersehbaren Schaden begrenzt, soweit eine solche Begrenzung zulässig ist.
+
+(6) Diese Lizenz begründet keine Verpflichtung des Lizenzgebers, bestimmte Funktionen bereitzustellen, Fehler zu beseitigen oder technischen Support zu leisten.
+
+(7) Etwaige gesondert vereinbarte entgeltliche Dienstleistungen unterliegen den dafür getroffenen Vereinbarungen und den anwendbaren gesetzlichen Bestimmungen.
+
+## § 13 – Verletzung der Lizenzbedingungen
+
+(1) Die in dieser Lizenz eingeräumten Nutzungsrechte stehen unter der Bedingung, dass die Lizenzpflichten eingehalten werden.
+
+(2) Bei einem Verstoß gegen § 3, § 4 Abs. 4 bis 6, § 6, § 7, § 8 oder § 9 Abs. 1, 2 oder 6 entfällt die Berechtigung zur Fortsetzung der hiervon betroffenen, nur aufgrund dieser Lizenz gestatteten Nutzung, soweit dies rechtlich zulässig ist.
+
+(3) Wird ein erstmaliger, nicht vorsätzlicher Verstoß innerhalb von 30 Tagen nach Kenntnis vollständig behoben, leben die betroffenen Nutzungsrechte wieder auf, sofern sie nicht aus anderen Gründen wirksam beendet wurden.
+
+(4) Bei vorsätzlichen oder wiederholten erheblichen Verstößen kann der Lizenzgeber die ihm gesetzlich zustehenden Rechte geltend machen.
+
+(5) Rechte, die Dritten zuvor unmittelbar und wirksam nach dieser Lizenz eingeräumt wurden, bleiben bestehen, soweit diese Dritten die Lizenzbedingungen selbst einhalten.
+
+(6) Gesetzliche Ansprüche, insbesondere wegen Urheberrechtsverletzungen, bleiben unberührt.
+
+## § 14 – Geltung früherer und späterer Lizenzfassungen
+
+(1) Diese Lizenz gilt für diejenigen Fassungen von CCU-ModbusServer, die vom hierzu berechtigten Lizenzgeber ausdrücklich unter dieser Lizenz veröffentlicht werden.
+
+(2) Der Lizenzgeber kann für zukünftige Veröffentlichungen neue Lizenzfassungen herausgeben.
+
+(3) Eine spätere Änderung des Lizenztextes verändert nicht automatisch bereits wirksam eingeräumte Nutzungsrechte an früheren Fassungen.
+
+(4) Empfänger dürfen eine bereits erhaltene Fassung weiterhin unter den Bedingungen nutzen, die für diese Fassung wirksam eingeräumt wurden, solange die betreffenden Rechte bestehen.
+
+(5) Eine Weitergabe unter einer anderen Lizenz ist nur zulässig, soweit sämtliche hierfür erforderlichen Rechte tatsächlich vorliegen.
+
+(6) Empfänger dürfen die Software und veränderte Fassungen wahlweise auch unter einer späteren, vom Lizenzgeber veröffentlichten Fassung dieser Lizenz nutzen und weitergeben. Jede spätere Fassung muss die Kostenfreiheit der Software (§ 3) und die Pflicht zur Bereitstellung des Quellcodes (§ 7) beibehalten.
+
+## § 15 – Schlussbestimmungen
+
+(1) Diese Lizenz ist als eigenständige Lizenz für CCU-ModbusServer ausgestaltet.
+
+(2) Die Lizenz darf nicht unter einer Bezeichnung verbreitet werden, die den unzutreffenden Eindruck erweckt, es handele sich um eine unveränderte, von einer fremden Organisation genehmigte Standardlizenz.
+
+(3) Es gilt deutsches Recht, soweit nicht zwingende gesetzliche Vorschriften, insbesondere des internationalen Privatrechts, entgegenstehen.
+
+(4) Gesetzlich zwingende Nutzungsbefugnisse, Verbraucherschutzrechte und Haftungsregelungen bleiben unberührt.
+
+(5) Sollte eine Bestimmung dieser Lizenz unwirksam oder undurchführbar sein, bestimmen sich die Rechtsfolgen nach den anwendbaren gesetzlichen Vorschriften. Die Wirksamkeit der übrigen Bestimmungen bleibt im gesetzlich vorgesehenen Umfang unberührt.
+
+(6) Maßgeblich ist die deutsche Fassung dieser Lizenz. Übersetzungen dienen lediglich der Information, soweit nicht ausdrücklich etwas anderes vereinbart wurde.
+
+(7) Wer Rechte aus dieser Lizenz in Anspruch nimmt, die über die gesetzlich ohnehin gestatteten Handlungen hinausgehen, darf dies nur unter Einhaltung der dafür geltenden Lizenzbedingungen tun.
+
+## Urheber- und Lizenzhinweis
+
+CCU-ModbusServer
+Copyright © 2026 Wolfram Henkel.
+Lizenziert unter der CCU-ModbusServer-Lizenz für kostenfreie Nutzung und Weitergabe, Version 1.1.
+
+Private und gewerbliche Nutzung sind erlaubt.
+Die Software einschließlich veränderter Fassungen darf ausschließlich kostenlos und unter den in dieser Lizenz festgelegten Bedingungen weitergegeben werden.
+Der zugehörige Quellcode muss bei jeder Weitergabe kostenlos zugänglich sein.
+Entgeltliche Arbeitsleistungen und der Verkauf von Hardware bleiben erlaubt. Für die Software selbst dürfen keine Entgelte verlangt werden.
+
+Ende des Lizenztextes.
