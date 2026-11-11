@@ -133,14 +133,15 @@ func (e *Engine) Sheet(now time.Time) []SheetRow {
 			continue
 		}
 		n := max(1, en.Format.Words())
-		r, _ := fcs(en.Area, n)
 		src := en.SysVarName
 		if en.Kind == "dp" {
 			src = strings.TrimPrefix(en.Key, "dp:")
 		}
 		rows = append(rows, SheetRow{
 			Export: en.Export, Label: en.Label, Key: en.Key, Source: src,
-			Table: en.Area.String(), FCRead: r,
+			// no function codes: the address is inactive (reads give the
+			// placeholder value with valid bit 0), only reserved
+			Table:   en.Area.String(),
 			Address: en.Address, Classic: classic(en.Area, en.Address), Count: n,
 			Format: string(en.Format), Scale: en.Scale, Access: "–",
 			ValidBit: mapping.ValidBase + en.Export, WarnBit: mapping.WarnBase + en.Export,

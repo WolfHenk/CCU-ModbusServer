@@ -554,7 +554,7 @@ func TestSheetListsReservedAddresses(t *testing.T) {
 	for _, r := range e.Sheet(time.Now()) {
 		if r.Key == "dp:HmIP-RF.T1:1.SET_POINT_MODE" {
 			found = true
-			if !r.Reserved || r.Address != 2 || r.Table != table.HoldingRegisters.String() || r.Valid || r.FCWrite != "" || r.ValidBit != mapping.ValidBase+2 {
+			if !r.Reserved || r.Address != 2 || r.Table != table.HoldingRegisters.String() || r.Valid || r.FCWrite != "" || r.FCRead != "" || r.ValidBit != mapping.ValidBase+2 {
 				t.Fatalf("reserved row %+v", r)
 			}
 		}
