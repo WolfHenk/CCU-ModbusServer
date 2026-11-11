@@ -147,8 +147,14 @@ func probeServer(cfg Config) error {
 	if _, err := io.ReadFull(c, resp); err != nil {
 		return err
 	}
-	if resp[0] != 0 || resp[1] != 1 || resp[7] != 0x04 || resp[8] != 2 {
-		return fmt.Errorf("unexpected response % x", resp)
+	// MBAP: transaction 1, protocol 0, length 5 (unit + fc + count + 2),
+	// same unit; PDU: FC04 with one register. This is a liveness check of
+	// the local server, not a protocol test.
+	want := []byte{0x00, 0x01, 0, 0, 0, 5, unit, 0x04, 2}
+	for i, b := range want {
+		if resp[i] != b {
+			return fmt.Errorf("unexpected response % x", resp)
+		}
 	}
 	return nil
 }

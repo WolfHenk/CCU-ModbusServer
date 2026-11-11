@@ -4,7 +4,7 @@
 # Datei:        tools/test_rcd_ccu.sh
 # Ersteller:    Wolfram Henkel
 # Datum:        11. Nov. 2026
-# Version:      0.1.1
+# Version:      0.1.2
 #
 # Copyright (c) 2026 Wolfram Henkel.
 #
@@ -51,19 +51,35 @@ $R start; rc=$?
 expect "belegter Port: Firewall unveraendert, kein Dienst" "502" "502" 0
 kill $BLOCK; sleep 1
 
-# 2. server dies right after start: firewall change of THIS start is undone
+# 2. server dies right after start
 cp "$BASE/bin/ccu-modbusserverd" /usr/local/tmp/cms-real
-cat > "$BASE/bin/ccu-modbusserverd" <<'EOF'
+cat > "$BASE/bin/ccu-modbusserverd" <<'EOF2'
 #!/bin/sh
 for a in "$@"; do case "$a" in -print-port|-check|-probe) exec /usr/local/tmp/cms-real "$@";; esac; done
 exit 3
-EOF
+EOF2
 chmod 755 "$BASE/bin/ccu-modbusserverd"
+foreign() { # add|del PORT as a foreign user port, via the OpenCCU library
+  echo "source /lib/libfirewall.tcl; Firewall_loadConfiguration; set p \$Firewall_USER_PORTS; if {\"$1\" eq \"add\"} {lappend p $2} else {set i [lsearch -exact \$p $2]; if {\$i>=0} {set p [lreplace \$p \$i \$i]}}; set Firewall_USER_PORTS \$p; Firewall_saveConfiguration; Firewall_configureFirewall" | tclsh
+}
+# 2a. port change 502 -> 1504 fails: own 502 must come back
 setport 1504
 $R start; rc=$?
-[ $rc -ne 0 ] && ok "Abbruch nach Start -> rc $rc" || fail "Abbruch: rc 0"
-expect "Abbruch: Freigabe 1504 zurueckgenommen, keine PID-Datei" "" "" 0
+[ $rc -ne 0 ] && ok "Portwechsel-Abbruch -> rc $rc" || fail "Portwechsel-Abbruch: rc 0"
+expect "Portwechsel-Abbruch: eigener 502 wiederhergestellt" "502" "502" 0
 [ -f /var/run/ccu-modbusserver.pid ] && fail "PID-Datei liegt noch" || ok "keine PID-Datei"
+# 2b. port change to an existing foreign port 1505 fails: 502 back, 1505 untouched
+foreign add 1505
+setport 1505
+$R start; rc=$?
+[ $rc -ne 0 ] && ok "Wechsel auf fremden Port, Abbruch -> rc $rc" || fail "fremder Port: rc 0"
+expect "fremder 1505 bleibt, eigener 502 wiederhergestellt" "1505 502" "502" 0
+foreign del 1505
+# 2c. no own port before: the port added by this start is removed again
+$R stop; "$BASE/bin/firewall" close
+setport 1506
+$R start; rc=$?
+expect "ohne Vorbesitz: Freigabe 1506 zurueckgenommen" "" "" 0
 cp /usr/local/tmp/cms-real "$BASE/bin/ccu-modbusserverd"; rm -f /usr/local/tmp/cms-real
 
 # 3. invalid configuration: nothing changes

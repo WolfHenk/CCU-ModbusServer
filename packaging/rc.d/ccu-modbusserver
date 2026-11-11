@@ -4,7 +4,7 @@
 # Datei:        packaging/rc.d/ccu-modbusserver
 # Ersteller:    Wolfram Henkel
 # Datum:        11. Nov. 2026
-# Version:      0.1.1
+# Version:      0.1.2
 #
 # Copyright (c) 2026 Wolfram Henkel.
 #
@@ -84,10 +84,16 @@ case "$1" in
     done
     kill "$PID" 2>/dev/null
     log "Server antwortet nicht auf Port $PORT; Start abgebrochen"
-    # Roll back only a firewall entry made by THIS start; an entry that
-    # existed before (same port) is kept.
+    # Restore the firewall state from before THIS start: drop a port it
+    # added and give back a port it removed (port change). Foreign ports
+    # were never touched.
     if [ $FW -eq 0 ] && [ "$("$BASE/bin/firewall" status 2>/dev/null)" != "$OWNED_BEFORE" ]; then
-      "$BASE/bin/firewall" close >>"$LOG" 2>&1
+      if [ -n "$OWNED_BEFORE" ]; then
+        "$BASE/bin/firewall" open "$OWNED_BEFORE" >>"$LOG" 2>&1
+      else
+        "$BASE/bin/firewall" close >>"$LOG" 2>&1
+      fi
+      log "Firewall auf vorherigen Stand zurueckgesetzt (eigener Port: ${OWNED_BEFORE:-keiner})"
     fi
     exit 1
     ;;
