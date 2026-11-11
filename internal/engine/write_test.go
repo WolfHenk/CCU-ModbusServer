@@ -374,3 +374,42 @@ func TestNoWriteWithoutRange(t *testing.T) {
 		t.Fatal("value sent")
 	}
 }
+
+// Regression (E2E test CCU 2026-11-11): writing the old value back right
+// after a change must not be acknowledged as "unchanged" while the cache
+// still holds the value from before the change.
+func TestToggleBackIsNotUnchanged(t *testing.T) {
+	e, pol, set := setupWrite(t)
+	e.SetWriter(set, WriteConfig{Allow: mustAllow(t), MinInterval: 50 * time.Millisecond})
+	// CCU: switch false
+	if err := e.WriteCoils(allowed, 0, []bool{true}); err != nil {
+		t.Fatal(err)
+	}
+	// cache still says false (no poll yet): writing false back is a real
+	// change -> rate limited, never "unchanged"
+	wantEx(t, e.WriteCoils(allowed, 0, []bool{false}), modbus.ExServerDeviceBusy)
+	time.Sleep(60 * time.Millisecond)
+	if err := e.WriteCoils(allowed, 0, []bool{false}); err != nil {
+		t.Fatal(err)
+	}
+	if set.n() != 2 {
+		t.Fatalf("toggle back not forwarded: %d calls", set.n())
+	}
+	// after a poll newer than the write, an equal value is unchanged again
+	pol.set(map[int]rega.Reading{20: {Found: true, Value: "false", Timestamp: 1}, 23: {Found: true, Value: "false", Timestamp: 2}}, time.Now())
+	if err := e.WriteCoils(allowed, 0, []bool{false}); err != nil {
+		t.Fatal(err)
+	}
+	if set.n() != 2 {
+		t.Fatal("unchanged value forwarded after fresh poll")
+	}
+}
+
+func mustAllow(t *testing.T) []*net.IPNet {
+	t.Helper()
+	a, err := ParseAllow([]string{"192.168.3.0/24"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return a
+}

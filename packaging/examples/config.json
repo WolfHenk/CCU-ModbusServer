@@ -3,5 +3,6 @@
   "port": 502,
   "only_unit_id": null,
   "max_connections": 16,
-  "poll_interval_ms": 1000
+  "poll_interval_ms": 1000,
+  "write_allow": []
 }

@@ -27,10 +27,13 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/WolfHenk/CCU-ModbusServer/internal/engine"
+	"github.com/WolfHenk/CCU-ModbusServer/internal/mapping"
 	"github.com/WolfHenk/CCU-ModbusServer/internal/poller"
 	"github.com/WolfHenk/CCU-ModbusServer/internal/rega"
 	"github.com/WolfHenk/CCU-ModbusServer/internal/table"
@@ -186,5 +189,116 @@ func TestLoadConfigDefaultsAndLimits(t *testing.T) {
 		if _, err := loadConfig(write(bad)); err == nil {
 			t.Errorf("accepted %s", bad)
 		}
+	}
+}
+
+func fpp(v float64) *float64 { return &v }
+
+func apiCatalog() *rega.Catalog {
+	return &rega.Catalog{Devices: []rega.Device{{Interface: "HmIP-RF", Address: "T1", Channels: []rega.Channel{
+		{Address: "T1:1", Name: "Bad Thermostat", Points: []rega.Point{
+			{ReGaID: 21, ID: "HmIP-RF.T1:1.SET_POINT_TEMPERATURE", Param: "SET_POINT_TEMPERATURE", Type: rega.Float, Min: fpp(4.5), Max: fpp(30.5), Unit: "°C", Readable: true, Writable: true},
+			{ReGaID: 25, ID: "HmIP-RF.T1:1.ACTUAL_TEMPERATURE", Param: "ACTUAL_TEMPERATURE", Type: rega.Float, Min: fpp(-40), Max: fpp(80), Unit: "°C", Readable: true},
+			{ReGaID: 26, ID: "HmIP-RF.T1:1.INFO", Param: "INFO", Type: rega.String, Readable: true},
+		}},
+	}}}, SysVars: []rega.SysVar{{ReGaID: 950, ID: "SV:950", Name: "Anwesenheit", Type: rega.Bool, Writable: true}}}
+}
+
+func apiService(t *testing.T) (*service, string) {
+	t.Helper()
+	dir := t.TempDir()
+	mp := filepath.Join(dir, "mapping.json")
+	pol := poller.New(&fakeCCU{}, poller.Config{})
+	eng, err := engine.New(mapping.New(statusLen), pol, nil, statusSlots(), time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &service{version: "t", src: &fakeCCU{}, pol: pol, eng: eng, mapPath: mp}
+	s.cat = apiCatalog()
+	eng.SetCatalog(s.cat)
+	return s, mp
+}
+
+func post(t *testing.T, h http.Handler, body string) (int, string) {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("POST", "/api/mapping", strings.NewReader(body)))
+	return rec.Code, rec.Body.String()
+}
+
+func TestMappingAPI(t *testing.T) {
+	s, mp := apiService(t)
+	h := s.api()
+	if code, body := post(t, h, `{"action":"add","key":"dp:HmIP-RF.T1:1.ACTUAL_TEMPERATURE"}`); code != 200 {
+		t.Fatalf("add: %d %s", code, body)
+	}
+	if code, body := post(t, h, `{"action":"add","key":"dp:HmIP-RF.T1:1.SET_POINT_TEMPERATURE","label":"Soll Bad","writable":true}`); code != 200 {
+		t.Fatalf("add writable: %d %s", code, body)
+	}
+	if code, body := post(t, h, `{"action":"add","key":"sv:950","writable":true}`); code != 200 {
+		t.Fatalf("add sysvar: %d %s", code, body)
+	}
+	// saved atomically and reloadable
+	m, err := mapping.Load(mp, statusLen)
+	if err != nil || len(m.Entries) != 3 {
+		t.Fatalf("saved mapping: %+v %v", m, err)
+	}
+	if m.Entries[0].Label != "Bad Thermostat" || m.Entries[1].Label != "Soll Bad" || m.Entries[2].Label != "Anwesenheit" {
+		t.Fatalf("labels: %+v", m.Entries)
+	}
+	if m.Entries[0].Format != mapping.Float32 || m.Entries[2].Format != mapping.Bit {
+		t.Fatalf("default formats: %+v", m.Entries)
+	}
+	bad := []string{
+		`{"action":"add","key":"dp:HmIP-RF.T1:1.INFO"}`,                                             // string
+		`{"action":"add","key":"dp:HmIP-RF.T1:1.ACTUAL_TEMPERATURE","writable":true}`,               // CCU read-only
+		`{"action":"add","key":"dp:HmIP-RF.T1:1.ACTUAL_TEMPERATURE","format":"int16","scale":1000}`, // overflow
+		`{"action":"add","key":"dp:nix"}`,
+		`{"action":"remove","key":"dp:nix"}`,
+		`{"action":"word_order","word_order":"BADC"}`,
+		`{"action":"explode"}`,
+		`{"action":"add","key":"sv:950","bogus":1}`, // unknown field
+		`not json`,
+	}
+	for _, b := range bad {
+		if code, body := post(t, h, b); code == 200 {
+			t.Errorf("accepted %s: %s", b, body)
+		}
+	}
+	if m2, _ := mapping.Load(mp, statusLen); len(m2.Entries) != 3 {
+		t.Fatal("rejected change modified the saved mapping")
+	}
+	if code, _ := post(t, h, `{"action":"remove","key":"sv:950"}`); code != 200 {
+		t.Fatal("remove")
+	}
+	if code, _ := post(t, h, `{"action":"word_order","word_order":"CDAB"}`); code != 200 {
+		t.Fatal("word order")
+	}
+	m, _ = mapping.Load(mp, statusLen)
+	if !m.Entries[2].Removed || m.WordOrder != "CDAB" {
+		t.Fatalf("after remove/word order: %+v", m)
+	}
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/api/sheet", nil))
+	var sheet struct {
+		WordOrder string            `json:"word_order"`
+		Rows      []engine.SheetRow `json:"rows"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &sheet); err != nil || len(sheet.Rows) != 2 || sheet.WordOrder != "CDAB" {
+		t.Fatalf("sheet: %s %v", rec.Body, err)
+	}
+	r := sheet.Rows[0] // input register 4 sorts after holding? no: input before holding
+	if r.Table != "Input Register" || r.Address != 4 || r.Classic != "300005" || r.FCRead != "04" || r.Access != "R" || r.Unit != "°C" || r.ValidBit != 10001 {
+		t.Fatalf("row 0: %+v", r)
+	}
+	r = sheet.Rows[1]
+	if r.Table != "Holding Register" || r.Access != "R/W" || r.FCWrite != "16" || r.Classic != "400001" {
+		t.Fatalf("row 1: %+v", r)
+	}
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/api/writelog", nil))
+	if rec.Code != 200 {
+		t.Fatalf("writelog %d", rec.Code)
 	}
 }

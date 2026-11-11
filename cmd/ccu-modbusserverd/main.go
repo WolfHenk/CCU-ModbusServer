@@ -36,10 +36,13 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"syscall"
 	"time"
 
+	"github.com/WolfHenk/CCU-ModbusServer/internal/engine"
+	"github.com/WolfHenk/CCU-ModbusServer/internal/mapping"
 	"github.com/WolfHenk/CCU-ModbusServer/internal/modbus"
 	"github.com/WolfHenk/CCU-ModbusServer/internal/poller"
 	"github.com/WolfHenk/CCU-ModbusServer/internal/rega"
@@ -51,13 +54,14 @@ var version = "dev"
 
 // Config is the add-on configuration file.
 type Config struct {
-	Schema         int    `json:"schema"`
-	Port           int    `json:"port"`
-	OnlyUnitID     *uint8 `json:"only_unit_id"`
-	MaxConnections int    `json:"max_connections"`
-	ReGaURL        string `json:"rega_url"`
-	PollIntervalMS int    `json:"poll_interval_ms"`
-	APIListen      string `json:"api_listen"`
+	Schema         int      `json:"schema"`
+	Port           int      `json:"port"`
+	OnlyUnitID     *uint8   `json:"only_unit_id"`
+	MaxConnections int      `json:"max_connections"`
+	ReGaURL        string   `json:"rega_url"`
+	PollIntervalMS int      `json:"poll_interval_ms"`
+	APIListen      string   `json:"api_listen"`
+	WriteAllow     []string `json:"write_allow"`
 }
 
 func loadConfig(path string) (Config, error) {
@@ -81,6 +85,9 @@ func loadConfig(path string) (Config, error) {
 	if c.PollIntervalMS < 200 || c.PollIntervalMS > 60000 {
 		return c, fmt.Errorf("%s: poll_interval_ms must be 200..60000", path)
 	}
+	if _, err := engine.ParseAllow(c.WriteAllow); err != nil {
+		return c, fmt.Errorf("%s: %w", path, err)
+	}
 	if host, _, err := net.SplitHostPort(c.APIListen); err != nil || (host != "127.0.0.1" && host != "::1" && host != "localhost") {
 		return c, fmt.Errorf("%s: api_listen must be a loopback address", path)
 	}
@@ -95,6 +102,7 @@ const (
 	statusLen     = 4
 )
 
+// statusSlots describes the status block at input registers 0..3.
 func statusSlots() []table.Slot {
 	return []table.Slot{
 		{Kind: table.Single},
@@ -290,39 +298,62 @@ func main() {
 		return
 	}
 
-	layout := baseLayout()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	srvCfg := modbus.Config{OnlyUnitID: cfg.OnlyUnitID, MaxConnections: cfg.MaxConnections}
+	// ReGa is the only data source today (see package source).
+	var ds source.DataSource = rega.NewClient(cfg.ReGaURL)
+	interval := time.Duration(cfg.PollIntervalMS) * time.Millisecond
+	pol := poller.New(ds, poller.Config{Interval: interval})
+	svc := &service{version: version, src: ds, pol: pol}
+
+	var srv *modbus.Server
 	if *demo {
-		layout = demoLayout()
-	}
-	tab, err := table.New(layout)
-	if err != nil {
-		log.Fatalf("layout: %v", err)
-	}
-	exports := tab.Count(table.Coils) + tab.Count(table.DiscreteInputs) +
-		tab.Count(table.HoldingRegisters) + tab.Count(table.InputRegisters) - 3 // without status block
-	tab.Update(func(w table.Writer) {
-		w.Set(table.InputRegisters, statusExports, uint16(exports))
-		if *demo {
+		tab, err := table.New(demoLayout())
+		if err != nil {
+			log.Fatalf("layout: %v", err)
+		}
+		tab.Update(func(w table.Writer) {
 			w.Set(table.DiscreteInputs, 0, 1, 0, 1, 0)
 			hi, lo := float32Regs(21.5)
 			w.Set(table.InputRegisters, 4, hi, lo)
 			w.Set(table.InputRegisters, 7, 1234)
+			w.Set(table.InputRegisters, statusExports, 13)
+		})
+		srv = modbus.NewServer(srvCfg, tab, table.Loopback{T: tab})
+		svc.tab = tab
+		svc.exports = 13
+		svc.status = func(flags uint16, up uint32) {
+			tab.Update(func(w table.Writer) { w.Set(table.InputRegisters, 0, flags, uint16(up>>16), uint16(up)) })
 		}
-	})
-
-	srv := modbus.NewServer(modbus.Config{
-		OnlyUnitID:     cfg.OnlyUnitID,
-		MaxConnections: cfg.MaxConnections,
-	}, tab, table.Loopback{T: tab})
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	// ReGa is the only data source today (see package source).
-	var ds source.DataSource = rega.NewClient(cfg.ReGaURL)
-	pol := poller.New(ds, poller.Config{Interval: time.Duration(cfg.PollIntervalMS) * time.Millisecond})
-	svc := &service{version: version, src: ds, pol: pol, tab: tab, exports: exports}
-	pol.OnCycle = func(map[int]rega.Reading, poller.Health) { svc.updateStatus() }
+	} else {
+		mapPath := filepath.Join(filepath.Dir(*cfgPath), "mapping.json")
+		m, err := mapping.Load(mapPath, statusLen)
+		if err != nil {
+			log.Fatalf("mapping: %v", err)
+		}
+		allow, err := engine.ParseAllow(cfg.WriteAllow)
+		if err != nil {
+			log.Fatalf("configuration: %v", err)
+		}
+		maxAge := 3*interval + 5*time.Second
+		eng, err := engine.New(m, pol, nil, statusSlots(), maxAge)
+		if err != nil {
+			log.Fatalf("mapping: %v", err)
+		}
+		eng.SetWriter(ds, engine.WriteConfig{Allow: allow})
+		srv = modbus.NewServer(srvCfg, eng.Table(), eng)
+		eng.SetSink(srv)
+		svc.eng, svc.mapPath = eng, mapPath
+		svc.status = eng.SetStatus
+	}
+	pol.OnCycle = func(v map[int]rega.Reading, h poller.Health) {
+		if svc.eng != nil {
+			svc.eng.OnCycle(v, h)
+		}
+		svc.updateStatus()
+	}
 	go pol.Run(ctx)
 	go svc.catalogLoop(ctx)
 
@@ -333,7 +364,7 @@ func main() {
 	apiSrv := &http.Server{Handler: svc.api(), ReadHeaderTimeout: 5 * time.Second}
 	go apiSrv.Serve(apiLn)
 
-	started := time.Now()
+	svc.started = time.Now()
 	go func() {
 		t := time.NewTicker(time.Second)
 		defer t.Stop()
@@ -341,11 +372,11 @@ func main() {
 			select {
 			case <-ctx.Done():
 				return
-			case <-t.C:
-				up := uint32(time.Since(started) / time.Second)
-				tab.Update(func(w table.Writer) {
-					w.Set(table.InputRegisters, statusUptime, uint16(up>>16), uint16(up))
-				})
+			case now := <-t.C:
+				if svc.eng != nil {
+					svc.eng.Refresh(now)
+				}
+				svc.updateStatus()
 			}
 		}
 	}()
@@ -359,7 +390,7 @@ func main() {
 		srv.Close()
 	}()
 
-	log.Printf("ccu-modbusserverd %s listening on %s (demo=%v, exports=%d)", version, ln.Addr(), *demo, exports)
+	log.Printf("ccu-modbusserverd %s listening on %s (demo=%v)", version, ln.Addr(), *demo)
 	if err := srv.Serve(ln); err != nil && !errors.Is(err, modbus.ErrServerClosed) {
 		log.Fatalf("serve: %v", err)
 	}

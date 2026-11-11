@@ -60,6 +60,7 @@ type meta struct {
 	min, max  *float64
 	listLen   int
 	list      []string
+	unit      string
 	writable  bool // CCU allows writing
 	pointName string
 }
@@ -128,6 +129,20 @@ func New(m *mapping.File, pol Poller, sink TableSink, statusSlots []table.Slot, 
 	defer e.rebuildMu.Unlock()
 	e.rebuild()
 	return e, nil
+}
+
+// SetSink sets the receiver of rebuilt tables (the Modbus server, which
+// itself needs the engine as backend, hence after New).
+func (e *Engine) SetSink(s TableSink) {
+	e.rebuildMu.Lock()
+	defer e.rebuildMu.Unlock()
+	e.mu.Lock()
+	e.sink = s
+	tab := e.tab
+	e.mu.Unlock()
+	if s != nil {
+		s.SetTable(tab)
+	}
 }
 
 // Reception returns the reception tracker (for the API).
@@ -200,7 +215,7 @@ func resolve(cat *rega.Catalog, en mapping.Entry) (int, meta, bool) {
 		for _, ch := range d.Channels {
 			for _, p := range ch.Points {
 				if mapping.KeyOfPoint(p) == en.Key {
-					return p.ReGaID, meta{typ: p.Type, min: p.Min, max: p.Max, listLen: len(p.ValueList), list: p.ValueList, writable: p.Writable, pointName: p.ID}, true
+					return p.ReGaID, meta{typ: p.Type, min: p.Min, max: p.Max, listLen: len(p.ValueList), list: p.ValueList, unit: p.Unit, writable: p.Writable, pointName: p.ID}, true
 				}
 			}
 		}
@@ -209,7 +224,7 @@ func resolve(cat *rega.Catalog, en mapping.Entry) (int, meta, bool) {
 }
 
 func svMeta(v *rega.SysVar) meta {
-	return meta{typ: v.Type, min: v.Min, max: v.Max, listLen: len(v.ValueList), list: v.ValueList, writable: v.Writable, pointName: v.Name}
+	return meta{typ: v.Type, min: v.Min, max: v.Max, listLen: len(v.ValueList), list: v.ValueList, unit: v.Unit, writable: v.Writable, pointName: v.Name}
 }
 
 // rebuild resolves all entries, rebuilds the table and the poll list.
@@ -278,8 +293,11 @@ func (e *Engine) rebuild() {
 
 	// External effects, still under rebuildMu.
 	e.pol.SetItems(quality.PollIDs(ids, unreach))
-	if e.sink != nil {
-		e.sink.SetTable(tab)
+	e.mu.Lock()
+	sink := e.sink
+	e.mu.Unlock()
+	if sink != nil {
+		sink.SetTable(tab)
 	}
 }
 

@@ -224,13 +224,18 @@ func (e *Engine) write(client net.Addr, area table.Area, start int, words []uint
 			return reject(en.Key, en.Label, v, err.Error(), modbus.ExIllegalDataValue)
 		}
 		same := false
-		if en.Type != rega.Action && quality.Judge(o.regaID, values, h.LastOK, e.MaxAge, now).Valid() {
+		// "Unchanged" needs a CCU value that is NEWER than our own last
+		// forwarded write of this entry; otherwise the cache may still show
+		// the value from before that write (fast toggle back and forth).
+		last, wrote := e.lastWrite[en.Key]
+		fresh := !wrote || h.LastOK.After(last)
+		if en.Type != rega.Action && fresh && quality.Judge(o.regaID, values, h.LastOK, e.MaxAge, now).Valid() {
 			if cur, ok := mapping.Encode(en, e.m.WordOrder, values[o.regaID].Value); ok && equalWords(cur, chunk) {
 				same = true
 			}
 		}
 		if !same {
-			if last, ok := e.lastWrite[en.Key]; ok && now.Sub(last) < e.wcfg.MinInterval {
+			if wrote && now.Sub(last) < e.wcfg.MinInterval {
 				return reject(en.Key, en.Label, v, "zu schnell hintereinander", modbus.ExServerDeviceBusy)
 			}
 		}
