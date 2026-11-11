@@ -24,6 +24,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -39,6 +40,7 @@ import (
 	"time"
 
 	"github.com/WolfHenk/CCU-ModbusServer/internal/modbus"
+	"github.com/WolfHenk/CCU-ModbusServer/internal/rega"
 	"github.com/WolfHenk/CCU-ModbusServer/internal/table"
 )
 
@@ -50,10 +52,11 @@ type Config struct {
 	Port           int    `json:"port"`
 	OnlyUnitID     *uint8 `json:"only_unit_id"`
 	MaxConnections int    `json:"max_connections"`
+	ReGaURL        string `json:"rega_url"`
 }
 
 func loadConfig(path string) (Config, error) {
-	c := Config{Schema: 1, Port: 502}
+	c := Config{Schema: 1, Port: 502, ReGaURL: rega.DefaultURL}
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return c, err
@@ -127,6 +130,53 @@ func float32Regs(f float32) (uint16, uint16) {
 	return uint16(b >> 16), uint16(b)
 }
 
+// runBenchPoll measures one bundled ReGa value read of n objects, 20
+// times in a row without overlap, and prints the timings.
+func runBenchPoll(cfg Config, n int) error {
+	ctx := context.Background()
+	c := rega.NewClient(cfg.ReGaURL)
+	cat, err := c.LoadCatalog(ctx)
+	if err != nil {
+		return err
+	}
+	var base []int
+	for _, d := range cat.Devices {
+		for _, ch := range d.Channels {
+			for _, p := range ch.Points {
+				base = append(base, p.ReGaID)
+			}
+		}
+	}
+	for _, v := range cat.SysVars {
+		base = append(base, v.ReGaID)
+	}
+	if len(base) == 0 {
+		return fmt.Errorf("no objects")
+	}
+	ids := make([]int, n)
+	for i := range ids {
+		ids[i] = base[i%len(base)]
+	}
+	var min, max, sum time.Duration
+	const runs = 20
+	for i := 0; i < runs; i++ {
+		t := time.Now()
+		if _, err := c.ReadValues(ctx, ids); err != nil {
+			return err
+		}
+		d := time.Since(t)
+		if i == 0 || d < min {
+			min = d
+		}
+		if d > max {
+			max = d
+		}
+		sum += d
+	}
+	fmt.Printf("objects=%d distinct=%d runs=%d min=%v avg=%v max=%v\n", n, len(base), runs, min, sum/runs, max)
+	return nil
+}
+
 // probeServer sends one status block read to the local server.
 func probeServer(cfg Config) error {
 	c, err := net.DialTimeout("tcp", "127.0.0.1:"+strconv.Itoa(cfg.Port), 2*time.Second)
@@ -165,6 +215,8 @@ func main() {
 	demo := flag.Bool("demo", false, "serve the fixed stage-1 test image")
 	listen := flag.String("listen", "", "listen address, overrides the configured port (tests)")
 	printPort := flag.Bool("print-port", false, "print the configured port and exit (used by the start script)")
+	dumpCatalog := flag.Bool("dump-catalog", false, "read the CCU catalog from ReGa, print it as JSON and exit")
+	benchPoll := flag.Int("bench-poll", 0, "measure ReGa value polling with N objects (IDs repeated), then exit")
 	probe := flag.Bool("probe", false, "check that a running server answers on 127.0.0.1:<port>, then exit")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
@@ -181,6 +233,24 @@ func main() {
 	}
 	if *printPort {
 		fmt.Println(cfg.Port)
+		return
+	}
+	if *dumpCatalog {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		cat, err := rega.NewClient(cfg.ReGaURL).LoadCatalog(ctx)
+		if err != nil {
+			log.Fatalf("catalog: %v", err)
+		}
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		enc.Encode(cat)
+		return
+	}
+	if *benchPoll > 0 {
+		if err := runBenchPoll(cfg, *benchPoll); err != nil {
+			log.Fatalf("bench: %v", err)
+		}
 		return
 	}
 	if *probe {
