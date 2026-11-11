@@ -52,10 +52,11 @@ type SheetRow struct {
 	Access    string                `json:"access"` // "R" or "R/W"
 	ValidBit  int                   `json:"valid_bit"`
 	WarnBit   int                   `json:"warn_bit"`
-	Value     string                `json:"value"`  // current CCU value
-	Valid     bool                  `json:"valid"`  // value quality
-	Reason    string                `json:"reason"` // text of the value quality
-	Comm      string                `json:"comm"`   // communication warning text
+	Value     string                `json:"value"`        // current CCU value
+	Valid     bool                  `json:"valid"`        // value quality
+	Reason    string                `json:"reason"`       // text of the value quality
+	Comm      string                `json:"comm"`         // communication warning text
+	CommWarn  bool                  `json:"comm_warning"` // Comm is a warning (UNREACH or unknown)
 	Reception quality.ReceptionInfo `json:"reception"`
 	Orphan    bool                  `json:"orphan"`
 	Reserved  bool                  `json:"reserved"` // deselected: address and bits stay reserved
@@ -120,7 +121,8 @@ func (e *Engine) Sheet(now time.Time) []SheetRow {
 		}
 		row.Valid, row.Reason = reason.Valid(), reason.String()
 		if o.regaID != 0 {
-			row.Comm = quality.CommState(o.unreach, values).String()
+			c := quality.CommState(o.unreach, values)
+			row.Comm, row.CommWarn = c.String(), c.Warning()
 		}
 		if en.Type == rega.Action {
 			row.Value = ""

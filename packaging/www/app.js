@@ -78,7 +78,7 @@ function showValue(v, type, list, unit) {
 }
 
 function accessText(p) {
-  if (p.type === 'ACTION') return 'Tastendruck (schreiben)';
+  if (p.type === 'ACTION') return 'schreiben';
   return p.writable ? 'lesen/schreiben' : 'lesen';
 }
 
@@ -279,8 +279,9 @@ function stateCell(r) {
   if (r.reserved) return el('span', {class: 'meta'}, 'abgewählt – Adresse bleibt reserviert');
   if (r.orphan) return el('span', {class: 'bad'}, 'nicht mehr in der CCU');
   const t = [el('span', {class: r.valid ? 'ok' : 'bad'}, r.reason)];
-  if (r.comm && r.comm !== 'keine Angabe' && r.comm !== 'ok') t.push(el('div', {class: 'warn'}, r.comm));
-  if (r.reception && r.reception.overdue) t.push(el('div', {class: 'warn'}, 'Meldung überfällig'));
+  if (r.comm_warning) t.push(el('div', {class: 'warn'}, r.comm));
+  // overdue is three-valued: 0 unknown, 1 no, 2 yes
+  if (r.reception && r.reception.overdue === 2) t.push(el('div', {class: 'warn'}, 'Meldung überfällig'));
   return el('span', {}, t);
 }
 
@@ -293,7 +294,7 @@ function renderExports() {
       el('td', {class: 'meta'}, r.source),
       el('td', {}, r.table),
       el('td', {}, r.address + (r.count > 1 ? '–' + (r.address + r.count - 1) : '')),
-      el('td', {}, (FORMAT_TEXT[r.format] || r.format) + (r.scale && r.scale !== 1 && r.format !== 'bit' ? ' ×' + deNum(r.scale) : '')),
+      el('td', {}, (r.format === 'bit' ? 'Bit' : r.format.toUpperCase()) + (r.scale && r.scale !== 1 && r.format !== 'bit' ? ' ×' + deNum(r.scale) : '')),
       el('td', {}, r.reserved ? '–' : showValue(r.value, info ? info.p.type : '', info ? info.p.value_list : null, r.unit)),
       el('td', {}, stateCell(r)),
       el('td', {}, r.reserved

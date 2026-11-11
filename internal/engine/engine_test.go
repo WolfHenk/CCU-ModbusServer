@@ -563,3 +563,22 @@ func TestSheetListsReservedAddresses(t *testing.T) {
 		t.Fatal("deselected entry missing from the sheet")
 	}
 }
+
+// The page shows a communication warning only for comm_warning, not for
+// every comm text ("erreichbar" was shown as a warning).
+func TestSheetCommWarningFlag(t *testing.T) {
+	pol := &fakePoller{}
+	e := newEngine(t, writeMapping(t), pol, nil)
+	e.SetCatalog(writeCatalog())
+	for _, tc := range []struct {
+		unreach string
+		warn    bool
+	}{{"false", false}, {"true", true}} {
+		pol.set(map[int]rega.Reading{20: {Found: true, Value: tc.unreach, Timestamp: 1}, 25: {Found: true, Value: "19.5", Timestamp: 1}}, time.Now())
+		for _, r := range e.Sheet(time.Now()) {
+			if r.Key == "dp:HmIP-RF.T1:1.ACTUAL_TEMPERATURE" && r.CommWarn != tc.warn {
+				t.Fatalf("UNREACH=%s: comm %q warning %v", tc.unreach, r.Comm, r.CommWarn)
+			}
+		}
+	}
+}
