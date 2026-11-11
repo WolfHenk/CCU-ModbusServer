@@ -3,7 +3,7 @@
 // Datei:        internal/quality/quality_test.go
 // Ersteller:    Wolfram Henkel
 // Datum:        11. Nov. 2026
-// Version:      0.2.1
+// Version:      0.2.3
 //
 // Copyright (c) 2026 Wolfram Henkel.
 //
@@ -31,88 +31,146 @@ func TestJudge(t *testing.T) {
 	fresh := now.Add(-time.Second)
 	maxAge := 10 * time.Second
 	vals := map[int]rega.Reading{
-		1:  {Found: true, Value: "21.5", Timestamp: 100},
-		2:  {Found: true, Value: "0", Timestamp: 0},     // never set
-		3:  {},                                          // gone from ReGa
-		4:  {Found: true, Value: "true", Timestamp: 50}, // device A unreachable
-		5:  {Found: true, Value: "false", Timestamp: 1}, // device B reachable
-		6:  {Found: true, Value: "1", Timestamp: 1000000},
-		7:  {Found: true, Value: "1", Timestamp: 0}, // never set on unreachable device
-		8:  {Found: true, Value: "", Timestamp: 1},  // UNREACH without a clear false
-		99: {Found: false},
+		1: {Found: true, Value: "21.5", Timestamp: 100},
+		2: {Found: true, Value: "0", Timestamp: 0},
+		3: {},
+		6: {Found: true, Value: "1", Timestamp: 1000000},
 	}
 	cases := []struct {
-		name      string
-		id, un    int
-		lastOK    time.Time
-		want      Reason
-		wantValid bool
+		name   string
+		id     int
+		lastOK time.Time
+		want   Reason
 	}{
-		{"good", 1, 0, fresh, Good, true},
-		{"old device timestamp is still good", 6, 0, fresh, Good, true},
-		{"never set", 2, 0, fresh, NeverSet, false},
-		{"missing", 3, 0, fresh, Missing, false},
-		{"unreach", 1, 4, fresh, Unreach, false},
-		{"reachable device", 1, 5, fresh, Good, true},
-		{"unreach beats never set", 7, 4, fresh, Unreach, false},
-		{"unreach datapoint gone -> unknown", 1, 99, fresh, Unknown, false},
-		{"unreach datapoint not polled -> unknown", 1, 98, fresh, Unknown, false},
-		{"unreach value not false -> unreach", 1, 8, fresh, Unreach, false},
-		{"not polled", 42, 0, fresh, Unknown, false},
-		{"source down", 1, 0, now.Add(-time.Minute), SourceDown, false},
-		{"never polled", 1, 0, time.Time{}, SourceDown, false},
+		{"good", 1, fresh, Good},
+		{"old device timestamp is still good", 6, fresh, Good},
+		{"never set", 2, fresh, NeverSet},
+		{"missing", 3, fresh, Missing},
+		{"not polled", 42, fresh, Unknown},
+		{"source down", 1, now.Add(-time.Minute), SourceDown},
+		{"never polled", 1, time.Time{}, SourceDown},
 	}
 	for _, c := range cases {
-		got := Judge(c.id, c.un, vals, c.lastOK, maxAge, now)
-		if got != c.want || got.Valid() != c.wantValid {
+		if got := Judge(c.id, vals, c.lastOK, maxAge, now); got != c.want || got.Valid() != (c.want == Good) {
 			t.Errorf("%s: got %v (%s)", c.name, got, got)
 		}
 	}
 }
 
-func TestUnreachIDs(t *testing.T) {
+// Regression (Wolfram, Bad-oben-Ventil): UNREACH = true while a measured
+// value keeps arriving. The value stays valid; the warning is separate.
+func TestUnreachDoesNotInvalidateReceivedValue(t *testing.T) {
+	now := time.Now()
+	vals := map[int]rega.Reading{
+		100: {Found: true, Value: "true", Timestamp: 50},              // UNREACH of the valve
+		101: {Found: true, Value: "21.0", Timestamp: now.Unix() - 30}, // ACTUAL_TEMPERATURE, just received
+		102: {Found: true, Value: "false", Timestamp: 1},              // UNREACH of another device
+		103: {Found: true, Value: "", Timestamp: 1},                   // UNREACH without clear false
+		104: {Found: false},                                           // UNREACH gone
+	}
+	if r := Judge(101, vals, now, 10*time.Second, now); r != Good {
+		t.Fatalf("value invalidated by UNREACH: %v", r)
+	}
+	cases := []struct {
+		un   int
+		want Comm
+		warn bool
+	}{
+		{100, CommUnreach, true}, {102, CommOK, false}, {103, CommUnreach, true},
+		{104, CommUnknown, true}, {999, CommUnknown, true}, {0, CommNone, false},
+	}
+	for _, c := range cases {
+		got := CommState(c.un, vals)
+		if got != c.want || got.Warning() != c.warn {
+			t.Errorf("unreach id %d: %v", c.un, got)
+		}
+	}
+}
+
+func TestUnreachIDsAndPollIDs(t *testing.T) {
 	cat := &rega.Catalog{Devices: []rega.Device{
 		{Address: "A", Channels: []rega.Channel{
 			{Address: "A:0", Points: []rega.Point{{ReGaID: 10, Param: "UNREACH"}, {ReGaID: 11, Param: "LOWBAT"}}},
 			{Address: "A:1", Points: []rega.Point{{ReGaID: 12, Param: "STATE"}}},
 		}},
-		{Address: "B", Channels: []rega.Channel{
-			{Address: "B:1", Points: []rega.Point{{ReGaID: 20, Param: "STATE"}}},
-		}},
+		{Address: "B", Channels: []rega.Channel{{Address: "B:1", Points: []rega.Point{{ReGaID: 20, Param: "STATE"}}}}},
 		{Address: "C", Channels: []rega.Channel{
-			{Address: "C:10", Points: []rega.Point{{ReGaID: 30, Param: "UNREACH"}}}, // not channel 0
+			{Address: "C:10", Points: []rega.Point{{ReGaID: 30, Param: "UNREACH"}}},
 			{Address: "C:1", Points: []rega.Point{{ReGaID: 31, Param: "STATE"}}},
 		}},
 	}}
 	m := UnreachIDs(cat)
-	if m[12] != 10 || m[11] != 10 || m[10] != 10 {
+	if m[12] != 10 || m[11] != 10 {
 		t.Errorf("device A: %v", m)
 	}
 	if _, ok := m[20]; ok {
-		t.Error("device B without UNREACH mapped")
+		t.Error("device B mapped")
 	}
 	if _, ok := m[31]; ok {
 		t.Error("UNREACH outside channel 0 used")
 	}
-	if len(UnreachIDs(nil)) != 0 {
-		t.Error("nil catalog")
+	got := PollIDs([]int{12, 31, 12, 0, 11}, m)
+	want := []int{12, 10, 31, 11}
+	if len(got) != len(want) {
+		t.Fatalf("poll ids %v", got)
 	}
-	for r := Good; r <= Unknown; r++ {
-		if r.String() == "unbekannt" {
-			t.Errorf("reason %d without text", r)
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("poll ids %v want %v", got, want)
 		}
 	}
 }
 
-func TestPollIDs(t *testing.T) {
-	got := PollIDs([]int{12, 31, 12, 0, 13}, map[int]int{12: 10, 13: 10})
-	want := []int{12, 10, 31, 13}
-	if len(got) != len(want) {
-		t.Fatalf("got %v", got)
+func TestReception(t *testing.T) {
+	r := NewReception()
+	base := int64(1_000_000)
+	// periodic sensor: an update every 180 s
+	for i := int64(0); i <= 5; i++ {
+		r.Observe(map[int]rega.Reading{1: {Found: true, Timestamp: base + 180*i}})
+		// polling the unchanged value again is not a new reception
+		r.Observe(map[int]rega.Reading{1: {Found: true, Timestamp: base + 180*i}})
 	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("got %v want %v", got, want)
+	last := base + 900
+	info := r.Info(1, time.Unix(last+60, 0))
+	if info.Samples != 5 || info.Typical != 180 || info.Overdue != TriNo || info.LastUpdate != last {
+		t.Fatalf("periodic: %+v", info)
+	}
+	if info := r.Info(1, time.Unix(last+3*180+1, 0)); info.Overdue != TriYes {
+		t.Fatalf("periodic silent: %+v", info)
+	}
+	// event-driven contact: two updates only -> no statement
+	r.Observe(map[int]rega.Reading{2: {Found: true, Timestamp: base}})
+	r.Observe(map[int]rega.Reading{2: {Found: true, Timestamp: base + 86400}})
+	if info := r.Info(2, time.Unix(base+10*86400, 0)); info.Overdue != TriUnknown || info.Typical != 0 {
+		t.Fatalf("event driven: %+v", info)
+	}
+	// never set and missing are ignored
+	r.Observe(map[int]rega.Reading{3: {Found: true, Timestamp: 0}, 4: {}})
+	if info := r.Info(3, time.Now()); info.LastUpdate != 0 {
+		t.Fatalf("never set tracked: %+v", info)
+	}
+	r.Forget(map[int]bool{2: true})
+	if info := r.Info(1, time.Now()); info.Samples != 0 {
+		t.Fatal("forgotten object still tracked")
+	}
+	// at most keepIntervals intervals are kept
+	for i := int64(1); i <= 40; i++ {
+		r.Observe(map[int]rega.Reading{5: {Found: true, Timestamp: base + 10*i}})
+	}
+	if info := r.Info(5, time.Unix(base+400, 0)); info.Samples != keepIntervals {
+		t.Fatalf("kept %d intervals", info.Samples)
+	}
+}
+
+func TestTexts(t *testing.T) {
+	for _, r := range []Reason{Good, SourceDown, Missing, NeverSet, Unknown} {
+		if r.String() == "unbekannt" {
+			t.Errorf("reason %d without text", r)
+		}
+	}
+	for c := CommNone; c <= CommUnknown; c++ {
+		if c.String() == "unbekannt" {
+			t.Errorf("comm %d without text", c)
 		}
 	}
 }

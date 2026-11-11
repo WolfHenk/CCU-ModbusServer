@@ -32,6 +32,8 @@ import (
 )
 
 type fakeSource struct {
+	block    chan struct{} // if set, the first read waits until it is closed
+	started  chan struct{} // closed when the blocking read has started
 	mu       sync.Mutex
 	calls    [][]int
 	pings    int
@@ -48,6 +50,14 @@ func (f *fakeSource) ReadValues(ctx context.Context, ids []int) (map[int]rega.Re
 		f.overlap.Store(true)
 	}
 	defer f.active.Add(-1)
+	f.mu.Lock()
+	block, started := f.block, f.started
+	f.block = nil
+	f.mu.Unlock()
+	if block != nil {
+		close(started)
+		<-block
+	}
 	if f.sleep > 0 {
 		time.Sleep(f.sleep)
 	}
@@ -250,5 +260,52 @@ func TestSetItemsDropsRemovedValues(t *testing.T) {
 	}
 	if !v[2].Found {
 		t.Error("kept id 2 lost its value")
+	}
+}
+
+// Regression (ChatGPT review 2b): a cycle that was reading while the
+// selection changed must not write its result back.
+func TestCycleDuringSetItemsIsDiscarded(t *testing.T) {
+	block := make(chan struct{})
+	started := make(chan struct{})
+	src := &fakeSource{block: block, started: started}
+	p := New(src, Config{Interval: time.Hour})
+	p.SetItems([]int{1, 2})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var mu sync.Mutex
+	var seen []map[int]rega.Reading
+	p.OnCycle = func(v map[int]rega.Reading, h Health) {
+		mu.Lock()
+		seen = append(seen, v)
+		mu.Unlock()
+	}
+	go p.Run(ctx)
+	<-started // first cycle for [1 2] is blocked inside ReadValues
+	p.SetItems([]int{2, 3})
+	if v, _ := p.Values(); len(v) != 0 {
+		t.Fatalf("values before any cycle: %v", v)
+	}
+	close(block) // let the old cycle finish
+	waitFor(t, func() bool { return p.Health().Cycles >= 1 })
+	v, _ := p.Values()
+	if _, ok := v[1]; ok {
+		t.Fatal("removed id 1 came back from the old cycle")
+	}
+	if !v[3].Found || !v[2].Found {
+		t.Fatalf("new selection not read: %v", v)
+	}
+	src.mu.Lock()
+	calls := src.calls
+	src.mu.Unlock()
+	if len(calls) != 2 || len(calls[1]) != 2 || calls[1][0] != 2 || calls[1][1] != 3 {
+		t.Fatalf("reads: %v", calls)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for _, c := range seen {
+		if _, ok := c[1]; ok {
+			t.Fatal("OnCycle saw the discarded result")
+		}
 	}
 }

@@ -94,6 +94,7 @@ type Poller struct {
 
 	mu      sync.Mutex
 	items   []int
+	gen     uint64 // incremented by every SetItems
 	values  map[int]rega.Reading
 	health  Health
 	changed chan struct{}
@@ -124,6 +125,7 @@ func (p *Poller) SetItems(ids []int) {
 	sort.Ints(list)
 	p.mu.Lock()
 	p.items = list
+	p.gen++
 	// Values of IDs that are no longer polled are dropped at once, so a
 	// removed or re-mapped object never shows an old reading.
 	for id := range p.values {
@@ -209,6 +211,7 @@ func (p *Poller) Run(ctx context.Context) {
 		}
 		p.mu.Lock()
 		items := append([]int(nil), p.items...)
+		gen := p.gen
 		p.mu.Unlock()
 
 		start := time.Now()
@@ -220,6 +223,14 @@ func (p *Poller) Run(ctx context.Context) {
 
 		var wait time.Duration
 		p.mu.Lock()
+		if err == nil && gen != p.gen {
+			// The selection changed while this cycle was reading: its
+			// result belongs to the old selection and is discarded (not
+			// even counted), so a removed ID can never come back. The new
+			// selection is read right away.
+			p.mu.Unlock()
+			continue
+		}
 		p.health.Cycles++
 		p.health.Duration = d
 		p.health.Items = len(items)
