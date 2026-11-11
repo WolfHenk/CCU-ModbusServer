@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"mime"
 	"net/http"
 	"sync"
 	"time"
@@ -55,7 +56,8 @@ type service struct {
 	// Normal operation: the engine owns the table.
 	eng     *engine.Engine
 	mapPath string
-	editMu  sync.Mutex // serializes mapping changes from the API
+	editMu  sync.Mutex                        // serializes mapping changes from the API
+	save    func(*mapping.File, string) error // nil = (*mapping.File).Save
 
 	// Demo mode / tests without engine.
 	tab     *table.Table
@@ -212,10 +214,8 @@ func (s *service) api() http.Handler {
 		writeJSON(w, http.StatusOK, s.eng.WriteLog())
 	})
 	mux.HandleFunc("POST /api/mapping", func(w http.ResponseWriter, r *http.Request) {
-		var req MappingChange
-		dec := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
-		dec.DisallowUnknownFields()
-		if err := dec.Decode(&req); err != nil {
+		req, err := decodeChange(w, r)
+		if err != nil {
 			writeJSON(w, http.StatusBadRequest, apiError{"ungültige Anfrage: " + err.Error()})
 			return
 		}
@@ -227,6 +227,48 @@ func (s *service) api() http.Handler {
 		writeJSON(w, http.StatusOK, m)
 	})
 	return mux
+}
+
+// maxChangeBody limits a change request; a real one is a few hundred bytes.
+const maxChangeBody = 16 << 10
+
+// decodeChange reads exactly one JSON object and nothing else.
+//
+// Protection against foreign web pages (CSRF): the API listens on the
+// loopback interface only; the browser never talks to it directly. The
+// add-on CGI checks the WebUI session and forwards the request without
+// the browser's Origin header. A request that still carries an Origin or
+// a cross-site Sec-Fetch-Site header did not come through that path and
+// is refused. Content-Type application/json cannot be sent by a plain
+// HTML form, which closes the remaining gap for simple cross-site posts.
+func decodeChange(w http.ResponseWriter, r *http.Request) (MappingChange, error) {
+	var req MappingChange
+	if r.Header.Get("Origin") != "" {
+		return req, errors.New("Origin-Kopf nicht erlaubt")
+	}
+	if v := r.Header.Get("Sec-Fetch-Site"); v != "" && v != "same-origin" && v != "none" {
+		return req, errors.New("seitenfremde Anfrage")
+	}
+	ct := r.Header.Get("Content-Type")
+	if mt, _, err := mime.ParseMediaType(ct); err != nil || mt != "application/json" {
+		return req, errors.New("Content-Type muss application/json sein")
+	}
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxChangeBody))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		return req, err
+	}
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		return req, errors.New("Daten nach dem JSON-Objekt")
+	}
+	return req, nil
+}
+
+func (s *service) saveMapping(m *mapping.File) error {
+	if s.save != nil {
+		return s.save(m, s.mapPath)
+	}
+	return m.Save(s.mapPath)
 }
 
 // MappingChange is one change requested by the add-on page.
@@ -268,8 +310,13 @@ func findObject(cat *rega.Catalog, key string) (mapping.Entry, *float64, *float6
 	return mapping.Entry{}, nil, nil, 0, false, "", fmt.Errorf("Objekt %q nicht in der Geräteliste", key)
 }
 
-// applyChange validates a change, saves the mapping atomically and only
-// then hands it to the engine. Any error leaves everything unchanged.
+// applyChange validates a change, activates it in the engine and only
+// then saves it atomically. If saving fails, the previous mapping is
+// activated again, so the running state always equals the file.
+// Any error leaves everything unchanged.
+//
+// Catalog ownership: s.cat is the service's copy for lookups; the engine
+// keeps its own clone (SetCatalog clones), so neither can change the other.
 func (s *service) applyChange(req MappingChange) (*mapping.File, error) {
 	s.editMu.Lock()
 	defer s.editMu.Unlock()
@@ -329,11 +376,15 @@ func (s *service) applyChange(req MappingChange) (*mapping.File, error) {
 	if err := m.Validate(statusLen); err != nil {
 		return nil, err
 	}
-	if err := m.Save(s.mapPath); err != nil {
-		return nil, fmt.Errorf("Speichern fehlgeschlagen: %w", err)
-	}
+	prev := s.eng.Mapping()
 	if err := s.eng.SetMapping(m); err != nil {
 		return nil, err
+	}
+	if err := s.saveMapping(m); err != nil {
+		if rerr := s.eng.SetMapping(prev); rerr != nil {
+			log.Printf("api: rollback failed: %v", rerr)
+		}
+		return nil, fmt.Errorf("Speichern fehlgeschlagen: %w", err)
 	}
 	return s.eng.Mapping(), nil
 }

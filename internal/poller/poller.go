@@ -96,6 +96,7 @@ type Poller struct {
 	items   []int
 	gen     uint64 // incremented by every SetItems
 	values  map[int]rega.Reading
+	readAt  map[int]time.Time // start of the cycle that read the value
 	health  Health
 	changed chan struct{}
 
@@ -108,7 +109,7 @@ type Poller struct {
 // New creates a poller.
 func New(src Source, cfg Config) *Poller {
 	cfg.defaults()
-	return &Poller{cfg: cfg, src: src, values: map[int]rega.Reading{}, changed: make(chan struct{}, 1)}
+	return &Poller{cfg: cfg, src: src, values: map[int]rega.Reading{}, readAt: map[int]time.Time{}, changed: make(chan struct{}, 1)}
 }
 
 // SetItems replaces the polled IDs (duplicates and IDs <= 0 removed).
@@ -131,6 +132,7 @@ func (p *Poller) SetItems(ids []int) {
 	for id := range p.values {
 		if !seen[id] {
 			delete(p.values, id)
+			delete(p.readAt, id)
 		}
 	}
 	p.mu.Unlock()
@@ -149,6 +151,15 @@ func (p *Poller) Values() (map[int]rega.Reading, Health) {
 		out[k] = v
 	}
 	return out, p.health
+}
+
+// ReadAt returns the START time of the cycle that delivered the current
+// value of id (zero if none). A value read by a cycle that started after
+// an event (e.g. a write) is known to be from after that event.
+func (p *Poller) ReadAt(id int) time.Time {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.readAt[id]
 }
 
 // Health returns the current health.
@@ -253,6 +264,9 @@ func (p *Poller) Run(ctx context.Context) {
 			p.health.LastOK = time.Now()
 			p.health.LastError = ""
 			p.values = vals
+			for id := range vals {
+				p.readAt[id] = start
+			}
 			wait = p.cfg.delay(d, len(items))
 		}
 		p.health.NextDelay = wait

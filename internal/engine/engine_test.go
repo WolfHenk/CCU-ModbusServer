@@ -36,6 +36,13 @@ type fakePoller struct {
 	items  []int
 	values map[int]rega.Reading
 	health poller.Health
+	readAt map[int]time.Time
+}
+
+func (p *fakePoller) ReadAt(id int) time.Time {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.readAt[id]
 }
 
 func (p *fakePoller) SetItems(ids []int) {
@@ -58,6 +65,10 @@ func (p *fakePoller) set(v map[int]rega.Reading, lastOK time.Time) {
 	p.mu.Lock()
 	p.values = v
 	p.health = poller.Health{OK: true, LastOK: lastOK}
+	p.readAt = map[int]time.Time{}
+	for id := range v {
+		p.readAt[id] = lastOK
+	}
 	p.mu.Unlock()
 }
 
@@ -422,5 +433,53 @@ func TestFormatChangeDropsSubstitute(t *testing.T) {
 	e.Refresh(now)
 	if v := read(t, sk.t, table.InputRegisters, 6, 1); v[0] != 0 {
 		t.Fatalf("old substitute reused after format change: %v", v)
+	}
+}
+
+// Regression R4: when the CCU gives an ID to a different object, the old
+// cached reading must not be published as valid for the new entry.
+func TestReusedIDIsUnknownUntilNextCycle(t *testing.T) {
+	pol := &fakePoller{}
+	e := newEngine(t, writeMapping(t), pol, nil)
+	e.SetCatalog(writeCatalog())
+	vals := map[int]rega.Reading{
+		20: {Found: true, Value: "false", Timestamp: 1},
+		21: {Found: true, Value: "20.000000", Timestamp: 1},
+		25: {Found: true, Value: "19.500000", Timestamp: 1},
+	}
+	pol.set(vals, time.Now())
+	e.OnCycle(vals, poller.Health{})
+	// export 1 = setpoint (id 21), export 5 = actual temperature (id 25)
+	if v, _ := bits(t, e.Table(), 5); v != 1 {
+		t.Fatal("actual temperature should be valid")
+	}
+	cat := writeCatalog()
+	pts := cat.Devices[0].Channels[1].Points
+	pts[0].ReGaID, pts[4].ReGaID = 25, 21 // IDs swapped by the CCU
+	e.SetCatalog(cat)
+	for _, n := range []int{1, 5} {
+		if v, _ := bits(t, e.Table(), n); v != 0 {
+			t.Fatalf("export %d valid with a reading of another object", n)
+		}
+	}
+	e.OnCycle(vals, poller.Health{})
+	if v, _ := bits(t, e.Table(), 5); v != 1 {
+		t.Fatal("not valid again after the next cycle")
+	}
+}
+
+// Regression R3: a rejected mapping leaves the active state untouched.
+func TestRejectedMappingKeepsState(t *testing.T) {
+	pol := &fakePoller{}
+	e := newEngine(t, writeMapping(t), pol, nil)
+	e.SetCatalog(writeCatalog())
+	before, tab := e.Mapping(), e.Table()
+	bad := before.Clone()
+	bad.Entries[0].Address = bad.Entries[1].Address // overlap
+	if err := e.SetMapping(bad); err == nil {
+		t.Fatal("overlapping mapping accepted")
+	}
+	if e.Table() != tab || len(e.Mapping().Entries) != len(before.Entries) || e.Mapping().Entries[0].Address != before.Entries[0].Address {
+		t.Fatal("state changed by a rejected mapping")
 	}
 }

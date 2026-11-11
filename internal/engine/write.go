@@ -171,7 +171,9 @@ func (e *Engine) WriteRegisters(client net.Addr, start int, values []uint16) err
 }
 
 // write validates the complete request first; only if every entry passes
-// is anything sent to the CCU. Exceptions:
+// is anything sent to the CCU. In-flight rule: a value already handed to
+// SetValue is completed; a change of exports, write permission or allow
+// list stops all values that have not been handed over yet. Exceptions:
 //
 //	01 client not on the write allow list
 //	02 address not a writable export (orphan, write disabled)
@@ -227,8 +229,10 @@ func (e *Engine) write(client net.Addr, area table.Area, start int, words []uint
 		// "Unchanged" needs a CCU value that is NEWER than our own last
 		// forwarded write of this entry; otherwise the cache may still show
 		// the value from before that write (fast toggle back and forth).
+		// The reading of THIS object must come from a cycle that started
+		// after our last forwarded write completed.
 		last, wrote := e.lastWrite[en.Key]
-		fresh := !wrote || h.LastOK.After(last)
+		fresh := (!wrote || e.pol.ReadAt(o.regaID).After(last)) && !e.stale[o.regaID]
 		if en.Type != rega.Action && fresh && quality.Judge(o.regaID, values, h.LastOK, e.MaxAge, now).Valid() {
 			if cur, ok := mapping.Encode(en, e.m.WordOrder, values[o.regaID].Value); ok && equalWords(cur, chunk) {
 				same = true
@@ -305,7 +309,12 @@ func (e *Engine) write(client net.Addr, area table.Area, start int, words []uint
 			}
 			return modbus.ExServerDeviceFail
 		}
-		e.record(LogEntry{Time: now, Client: cl, Key: en.Key, Label: en.Label, Value: s.value, Result: "ok (von CCU angenommen, nicht bestätigt ausgeführt)"})
+		// the write counts from its completion: only a cycle that starts
+		// after this moment can show its effect
+		e.mu.Lock()
+		e.lastWrite[en.Key] = time.Now()
+		e.logWrite(LogEntry{Time: now, Client: cl, Key: en.Key, Label: en.Label, Value: s.value, Result: "ok (von CCU angenommen, nicht bestätigt ausgeführt)"})
+		e.mu.Unlock()
 	}
 	return nil
 }

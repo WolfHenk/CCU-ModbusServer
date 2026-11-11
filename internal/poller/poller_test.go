@@ -337,3 +337,22 @@ func TestFailedCycleDuringSetItemsIsDiscarded(t *testing.T) {
 		t.Fatalf("new selection not read: %v", v)
 	}
 }
+
+func TestReadAtIsCycleStart(t *testing.T) {
+	src := &fakeSource{sleep: 30 * time.Millisecond}
+	p := New(src, Config{Interval: time.Hour})
+	p.SetItems([]int{1})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	before := time.Now()
+	go p.Run(ctx)
+	waitFor(t, func() bool { return p.Health().Cycles >= 1 })
+	at := p.ReadAt(1)
+	if at.Before(before) || !at.Before(p.Health().LastOK.Add(-20*time.Millisecond)) {
+		t.Fatalf("readAt %v not the cycle start (lastOK %v)", at, p.Health().LastOK)
+	}
+	p.SetItems([]int{2})
+	if !p.ReadAt(1).IsZero() {
+		t.Fatal("readAt kept for removed id")
+	}
+}

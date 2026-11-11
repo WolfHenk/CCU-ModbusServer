@@ -221,9 +221,69 @@ func apiService(t *testing.T) (*service, string) {
 
 func post(t *testing.T, h http.Handler, body string) (int, string) {
 	t.Helper()
+	return postH(t, h, body, map[string]string{"Content-Type": "application/json"})
+}
+
+func postH(t *testing.T, h http.Handler, body string, hdr map[string]string) (int, string) {
+	t.Helper()
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest("POST", "/api/mapping", strings.NewReader(body)))
+	req := httptest.NewRequest("POST", "/api/mapping", strings.NewReader(body))
+	for k, v := range hdr {
+		req.Header.Set(k, v)
+	}
+	h.ServeHTTP(rec, req)
 	return rec.Code, rec.Body.String()
+}
+
+// Regression N2: exactly one JSON object, bounded size, no browser
+// cross-site requests.
+func TestMappingAPIStrictRequest(t *testing.T) {
+	s, mp := apiService(t)
+	h := s.api()
+	ok := `{"action":"add","key":"sv:950"}`
+	cases := []struct {
+		name string
+		body string
+		hdr  map[string]string
+	}{
+		{"trailing object", ok + `{"action":"remove","key":"sv:950"}`, map[string]string{"Content-Type": "application/json"}},
+		{"trailing garbage", ok + ` x`, map[string]string{"Content-Type": "application/json"}},
+		{"too large", `{"action":"add","key":"sv:950","label":"` + strings.Repeat("a", maxChangeBody) + `"}`, map[string]string{"Content-Type": "application/json"}},
+		{"form post", ok, map[string]string{"Content-Type": "text/plain"}},
+		{"no type", ok, nil},
+		{"origin", ok, map[string]string{"Content-Type": "application/json", "Origin": "http://evil.example"}},
+		{"cross site", ok, map[string]string{"Content-Type": "application/json", "Sec-Fetch-Site": "cross-site"}},
+	}
+	for _, c := range cases {
+		if code, body := postH(t, h, c.body, c.hdr); code != http.StatusBadRequest {
+			t.Errorf("%s: %d %s", c.name, code, body)
+		}
+	}
+	if _, err := os.Stat(mp); err == nil {
+		t.Fatal("rejected request wrote a mapping")
+	}
+	if code, body := postH(t, h, ok+"\n", map[string]string{"Content-Type": "application/json; charset=utf-8"}); code != 200 {
+		t.Fatalf("valid request with trailing newline: %d %s", code, body)
+	}
+}
+
+// Regression N3: if saving fails, the engine keeps the previous mapping.
+func TestMappingSaveFailureRollsBack(t *testing.T) {
+	s, mp := apiService(t)
+	h := s.api()
+	if code, body := post(t, h, `{"action":"add","key":"sv:950"}`); code != 200 {
+		t.Fatalf("%d %s", code, body)
+	}
+	s.save = func(*mapping.File, string) error { return errors.New("disk full") }
+	if code, _ := post(t, h, `{"action":"add","key":"dp:HmIP-RF.T1:1.ACTUAL_TEMPERATURE"}`); code == 200 {
+		t.Fatal("change accepted although saving failed")
+	}
+	if n := len(s.eng.Mapping().Active()); n != 1 {
+		t.Fatalf("engine runs %d exports, file has 1", n)
+	}
+	if m, _ := mapping.Load(mp, statusLen); len(m.Entries) != 1 {
+		t.Fatal("file changed")
+	}
 }
 
 func TestMappingAPI(t *testing.T) {

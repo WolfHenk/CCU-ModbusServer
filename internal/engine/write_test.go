@@ -413,3 +413,25 @@ func mustAllow(t *testing.T) []*net.IPNet {
 	}
 	return a
 }
+
+// Regression N1: a newer cycle in general is not enough; the reading of
+// the written object itself must come from a cycle after the write.
+func TestSameNeedsPerIDReadAfterWrite(t *testing.T) {
+	e, pol, set := setupWrite(t)
+	e.SetWriter(set, WriteConfig{Allow: mustAllow(t), MinInterval: time.Nanosecond})
+	if err := e.WriteCoils(allowed, 0, []bool{true}); err != nil {
+		t.Fatal(err)
+	}
+	// global cycle is newer, but ID 23 still carries its old reading
+	old := pol.ReadAt(23)
+	pol.set(map[int]rega.Reading{20: {Found: true, Value: "false", Timestamp: 1}, 23: {Found: true, Value: "false", Timestamp: 1}}, time.Now().Add(time.Second))
+	pol.mu.Lock()
+	pol.readAt[23] = old
+	pol.mu.Unlock()
+	if err := e.WriteCoils(allowed, 0, []bool{false}); err != nil {
+		t.Fatal(err)
+	}
+	if set.n() != 2 {
+		t.Fatalf("toggle back acknowledged from stale per-ID reading: %d calls", set.n())
+	}
+}

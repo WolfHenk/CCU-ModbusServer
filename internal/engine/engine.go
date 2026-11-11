@@ -24,6 +24,8 @@
 package engine
 
 import (
+	"fmt"
+	"log"
 	"strconv"
 	"sync"
 	"time"
@@ -39,6 +41,8 @@ import (
 type Poller interface {
 	SetItems(ids []int)
 	Values() (map[int]rega.Reading, poller.Health)
+	// ReadAt is the start of the cycle that read the current value of id.
+	ReadAt(id int) time.Time
 }
 
 // TableSink receives a rebuilt table (the Modbus server).
@@ -86,6 +90,12 @@ type Engine struct {
 	byAddr map[addrKey]int // area+address -> index into objs
 	tab    *table.Table
 	last   map[string]lastWords // last good words per entry key
+	// idKey remembers which entry a ReGa ID belonged to; stale holds IDs
+	// whose cached reading may belong to a different object after a
+	// rebuild (ID reused for another key). They count as "not read yet"
+	// until the next completed poll cycle.
+	idKey map[int]string
+	stale map[int]bool
 
 	// write path
 	wsrc      ValueSetter
@@ -122,12 +132,14 @@ func New(m *mapping.File, pol Poller, sink TableSink, statusSlots []table.Slot, 
 	e := &Engine{
 		StatusSlots: statusSlots, MaxAge: maxAge,
 		pol: pol, sink: sink, rec: quality.NewReception(),
-		m: m.Clone(), last: map[string]lastWords{}, started: time.Now(),
-		lastWrite: map[string]time.Time{},
+		last: map[string]lastWords{}, started: time.Now(),
+		lastWrite: map[string]time.Time{}, idKey: map[int]string{}, stale: map[int]bool{},
 	}
 	e.rebuildMu.Lock()
 	defer e.rebuildMu.Unlock()
-	e.rebuild()
+	if err := e.rebuild(m.Clone(), nil); err != nil {
+		return nil, err
+	}
 	return e, nil
 }
 
@@ -161,9 +173,11 @@ func (e *Engine) SetCatalog(cat *rega.Catalog) {
 	e.rebuildMu.Lock()
 	defer e.rebuildMu.Unlock()
 	e.mu.Lock()
-	e.cat = cat
+	m := e.m
 	e.mu.Unlock()
-	e.rebuild()
+	if err := e.rebuild(m, cat); err != nil {
+		log.Printf("engine: catalog not applied: %v", err)
+	}
 }
 
 // SetMapping replaces the mapping (after a change in the WebUI). The
@@ -176,10 +190,10 @@ func (e *Engine) SetMapping(m *mapping.File) error {
 	e.rebuildMu.Lock()
 	defer e.rebuildMu.Unlock()
 	e.mu.Lock()
-	e.m = c
+	cat := e.cat
 	e.mu.Unlock()
-	e.rebuild()
-	return nil
+	// The mapping becomes active only if the rebuild succeeds.
+	return e.rebuild(c, cat)
 }
 
 // Mapping returns a copy of the current mapping.
@@ -227,22 +241,23 @@ func svMeta(v *rega.SysVar) meta {
 	return meta{typ: v.Type, min: v.Min, max: v.Max, listLen: len(v.ValueList), list: v.ValueList, unit: v.Unit, writable: v.Writable, pointName: v.Name}
 }
 
-// rebuild resolves all entries, rebuilds the table and the poll list.
-func (e *Engine) rebuild() {
-	e.mu.Lock()
-	unreach := quality.UnreachIDs(e.cat)
+// rebuild resolves the entries of m against cat, builds and fills the
+// new table and only then makes m, cat and the table current. On error
+// nothing changes. e.rebuildMu must be held; m and cat are owned by the
+// engine from here on.
+func (e *Engine) rebuild(m *mapping.File, cat *rega.Catalog) error {
+	unreach := quality.UnreachIDs(cat)
 	var objs []object
 	var ids []int
 	// orphan state is computed here, never stored in the file
-	work := *e.m
-	work.Entries = append([]mapping.Entry(nil), e.m.Entries...)
+	work := m.Clone()
 	for i := range work.Entries {
 		en := &work.Entries[i]
 		en.Orphan = false
 		if en.Removed {
 			continue
 		}
-		id, md, ok := resolve(e.cat, *en)
+		id, md, ok := resolve(cat, *en)
 		if ok && mapping.CheckFormat(md.typ, en.Format, en.Scale, md.min, md.max, md.listLen) != nil {
 			ok = false // type changed in the CCU: format no longer fits
 		}
@@ -264,10 +279,22 @@ func (e *Engine) rebuild() {
 	}
 	tab, err := table.New(work.Layout(e.StatusSlots))
 	if err != nil {
-		// A validated mapping always gives a valid layout; keep the old
-		// table rather than serving nothing.
-		e.mu.Unlock()
-		return
+		return fmt.Errorf("table layout: %w", err)
+	}
+	idKey := map[int]string{}
+	for _, o := range objs {
+		if o.regaID != 0 {
+			idKey[o.regaID] = o.entry.Key
+		}
+	}
+
+	e.mu.Lock()
+	// IDs that now belong to a different entry than before: their cached
+	// reading is not trusted until the next completed cycle.
+	for id, k := range idKey {
+		if old, ok := e.idKey[id]; ok && old != k {
+			e.stale[id] = true
+		}
 	}
 	// The new table is complete BEFORE anybody sees it: status block
 	// carried over, values and bits filled from the current readings.
@@ -278,7 +305,8 @@ func (e *Engine) rebuild() {
 	}
 	values, h := e.pol.Values()
 	e.fill(tab, objs, work.WordOrder, values, h, time.Now())
-	e.objs, e.byAddr, e.tab = objs, byAddr, tab
+	e.m, e.cat = m, cat
+	e.objs, e.byAddr, e.tab, e.idKey = objs, byAddr, tab, idKey
 	e.wgen++ // running writes must not continue with the old exports
 	keep := map[string]bool{}
 	for _, o := range objs {
@@ -289,16 +317,15 @@ func (e *Engine) rebuild() {
 			delete(e.last, k)
 		}
 	}
+	sink := e.sink
 	e.mu.Unlock()
 
 	// External effects, still under rebuildMu.
 	e.pol.SetItems(quality.PollIDs(ids, unreach))
-	e.mu.Lock()
-	sink := e.sink
-	e.mu.Unlock()
 	if sink != nil {
 		sink.SetTable(tab)
 	}
+	return nil
 }
 
 // Exports returns the number of active entries.
@@ -312,6 +339,11 @@ func (e *Engine) Exports() int {
 func (e *Engine) OnCycle(values map[int]rega.Reading, _ poller.Health) {
 	if values != nil {
 		e.rec.Observe(values)
+		// a completed cycle of the current selection: cached readings
+		// belong to the current entries again
+		e.mu.Lock()
+		e.stale = map[int]bool{}
+		e.mu.Unlock()
 	}
 	e.Refresh(time.Now())
 }
@@ -338,6 +370,9 @@ func (e *Engine) fill(tab *table.Table, objs []object, wordOrder string, values 
 			reason := quality.Missing
 			if o.regaID != 0 {
 				reason = quality.Judge(o.regaID, values, h.LastOK, e.MaxAge, now)
+				if e.stale[o.regaID] {
+					reason = quality.Unknown
+				}
 			}
 			valid := false
 			var words []uint16
