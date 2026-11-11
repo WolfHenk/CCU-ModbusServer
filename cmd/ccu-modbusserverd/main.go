@@ -43,6 +43,7 @@ import (
 	"github.com/WolfHenk/CCU-ModbusServer/internal/modbus"
 	"github.com/WolfHenk/CCU-ModbusServer/internal/poller"
 	"github.com/WolfHenk/CCU-ModbusServer/internal/rega"
+	"github.com/WolfHenk/CCU-ModbusServer/internal/source"
 	"github.com/WolfHenk/CCU-ModbusServer/internal/table"
 )
 
@@ -317,9 +318,10 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	rc := rega.NewClient(cfg.ReGaURL)
-	pol := poller.New(rc, poller.Config{Interval: time.Duration(cfg.PollIntervalMS) * time.Millisecond})
-	svc := &service{version: version, src: rc, pol: pol, tab: tab, exports: exports}
+	// ReGa is the only data source today (see package source).
+	var ds source.DataSource = rega.NewClient(cfg.ReGaURL)
+	pol := poller.New(ds, poller.Config{Interval: time.Duration(cfg.PollIntervalMS) * time.Millisecond})
+	svc := &service{version: version, src: ds, pol: pol, tab: tab, exports: exports}
 	pol.OnCycle = func(map[int]rega.Reading, poller.Health) { svc.updateStatus() }
 	go pol.Run(ctx)
 	go svc.catalogLoop(ctx)
