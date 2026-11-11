@@ -462,10 +462,64 @@ func TestReusedIDIsUnknownUntilNextCycle(t *testing.T) {
 			t.Fatalf("export %d valid with a reading of another object", n)
 		}
 	}
+	// K2: a cycle that started before the reassignment (ReadAt old) does
+	// not clear the flag
 	e.OnCycle(vals, poller.Health{})
-	if v, _ := bits(t, e.Table(), 5); v != 1 {
-		t.Fatal("not valid again after the next cycle")
+	for _, n := range []int{1, 5} {
+		if v, _ := bits(t, e.Table(), n); v != 0 {
+			t.Fatalf("export %d valid after a cycle that started before the rebuild", n)
+		}
 	}
+	// only ID 25 read again after the rebuild: only its entry recovers
+	time.Sleep(2 * time.Millisecond)
+	pol.mu.Lock()
+	pol.readAt[25] = time.Now()
+	pol.mu.Unlock()
+	e.OnCycle(vals, poller.Health{})
+	// setpoint entry (export 1) now uses ID 25, actual temp (5) ID 21
+	if v, _ := bits(t, e.Table(), 1); v != 1 {
+		t.Fatal("entry with re-read ID not valid again")
+	}
+	if v, _ := bits(t, e.Table(), 5); v != 0 {
+		t.Fatal("entry whose ID was not re-read became valid")
+	}
+}
+
+// K1: the engine owns its catalog; changes of the caller's copy after
+// SetCatalog must not reach it (run with -race).
+func TestCatalogIsCopiedOnEntry(t *testing.T) {
+	pol := &fakePoller{}
+	e := newEngine(t, writeMapping(t), pol, nil)
+	cat := writeCatalog()
+	e.SetCatalog(cat)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 200; i++ {
+			p := &cat.Devices[0].Channels[1].Points[0]
+			p.Writable = i%2 == 0
+			*p.Max = float64(i)
+			p.ReGaID = 9000 + i
+		}
+	}()
+	for i := 0; i < 50; i++ {
+		if err := e.SetMapping(e.Mapping()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	<-done
+	if err := e.SetMapping(e.Mapping()); err != nil {
+		t.Fatal(err)
+	}
+	for _, o := range e.objs {
+		if o.entry.Key == "dp:HmIP-RF.T1:1.SET_POINT_TEMPERATURE" {
+			if o.regaID != 21 || !o.meta.writable || o.meta.max == nil || *o.meta.max != 30.5 {
+				t.Fatalf("engine follows the caller's catalog: id %d writable %v max %v", o.regaID, o.meta.writable, o.meta.max)
+			}
+			return
+		}
+	}
+	t.Fatal("entry missing")
 }
 
 // Regression R3: a rejected mapping leaves the active state untouched.

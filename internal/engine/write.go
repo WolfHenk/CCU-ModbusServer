@@ -232,7 +232,7 @@ func (e *Engine) write(client net.Addr, area table.Area, start int, words []uint
 		// The reading of THIS object must come from a cycle that started
 		// after our last forwarded write completed.
 		last, wrote := e.lastWrite[en.Key]
-		fresh := (!wrote || e.pol.ReadAt(o.regaID).After(last)) && !e.stale[o.regaID]
+		fresh := (!wrote || e.pol.ReadAt(o.regaID).After(last)) && !e.isStale(o.regaID)
 		if en.Type != rega.Action && fresh && quality.Judge(o.regaID, values, h.LastOK, e.MaxAge, now).Valid() {
 			if cur, ok := mapping.Encode(en, e.m.WordOrder, values[o.regaID].Value); ok && equalWords(cur, chunk) {
 				same = true

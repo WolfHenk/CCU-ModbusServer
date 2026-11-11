@@ -274,12 +274,17 @@ func TestMappingSaveFailureRollsBack(t *testing.T) {
 	if code, body := post(t, h, `{"action":"add","key":"sv:950"}`); code != 200 {
 		t.Fatalf("%d %s", code, body)
 	}
-	s.save = func(*mapping.File, string) error { return errors.New("disk full") }
+	// K3: while the file is written, Modbus must still run the old mapping
+	var during int
+	s.save = func(*mapping.File, string) error {
+		during = len(s.eng.Mapping().Active())
+		return errors.New("disk full")
+	}
 	if code, _ := post(t, h, `{"action":"add","key":"dp:HmIP-RF.T1:1.ACTUAL_TEMPERATURE"}`); code == 200 {
 		t.Fatal("change accepted although saving failed")
 	}
-	if n := len(s.eng.Mapping().Active()); n != 1 {
-		t.Fatalf("engine runs %d exports, file has 1", n)
+	if n := len(s.eng.Mapping().Active()); n != 1 || during != 1 {
+		t.Fatalf("engine runs %d exports (%d while saving), file has 1", n, during)
 	}
 	if m, _ := mapping.Load(mp, statusLen); len(m.Entries) != 1 {
 		t.Fatal("file changed")
@@ -361,4 +366,51 @@ func TestMappingAPI(t *testing.T) {
 	if rec.Code != 200 {
 		t.Fatalf("writelog %d", rec.Code)
 	}
+}
+
+type nopSetter struct{}
+
+func (nopSetter) SetValue(context.Context, int, rega.Type, float64) error { return nil }
+
+func TestWriteAllowAPI(t *testing.T) {
+	s, mp := apiService(t)
+	s.cfgPath = filepath.Join(filepath.Dir(mp), "config.json")
+	if err := os.WriteFile(s.cfgPath, []byte(`{"schema":1,"port":1502,"write_allow":["10.0.0.1"],"poll_interval_ms":2000}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s.setter = nopSetter{}
+	h := s.api()
+	if code, body := postPath(t, h, "/api/writeallow", `{"write_allow":["192.168.3.0/24"," ","fd00::1"]}`); code != 200 {
+		t.Fatalf("%d %s", code, body)
+	}
+	c, err := loadConfig(s.cfgPath)
+	if err != nil || c.Port != 1502 || c.PollIntervalMS != 2000 || len(c.WriteAllow) != 2 || c.WriteAllow[0] != "192.168.3.0/24" {
+		t.Fatalf("saved config %+v %v", c, err)
+	}
+	if code, _ := postPath(t, h, "/api/writeallow", `{"write_allow":["192.168.3.300"]}`); code == 200 {
+		t.Fatal("invalid address accepted")
+	}
+	// save failure: old list stays active and in the file
+	s.cfgPath = filepath.Join(t.TempDir(), "missing", "config.json")
+	if code, _ := postPath(t, h, "/api/writeallow", `{"write_allow":["10.9.9.9"]}`); code == 200 {
+		t.Fatal("accepted without saving")
+	}
+	if got := engine.FormatAllow(s.wcfg.Allow); len(got) != 2 {
+		t.Fatalf("active list changed: %v", got)
+	}
+	rec := httptest.NewRecorder()
+	s.cfgPath = filepath.Join(filepath.Dir(mp), "config.json")
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/api/config", nil))
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"port":1502`) {
+		t.Fatalf("config view %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func postPath(t *testing.T, h http.Handler, path, body string) (int, string) {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", path, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	h.ServeHTTP(rec, req)
+	return rec.Code, rec.Body.String()
 }

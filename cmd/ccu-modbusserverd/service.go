@@ -28,6 +28,9 @@ import (
 	"log"
 	"mime"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -58,6 +61,9 @@ type service struct {
 	mapPath string
 	editMu  sync.Mutex                        // serializes mapping changes from the API
 	save    func(*mapping.File, string) error // nil = (*mapping.File).Save
+	cfgPath string
+	setter  engine.ValueSetter
+	wcfg    engine.WriteConfig // active write configuration
 
 	// Demo mode / tests without engine.
 	tab     *table.Table
@@ -213,6 +219,27 @@ func (s *service) api() http.Handler {
 	mux.HandleFunc("GET /api/writelog", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, s.eng.WriteLog())
 	})
+	mux.HandleFunc("GET /api/config", func(w http.ResponseWriter, r *http.Request) {
+		c, err := s.configView()
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, apiError{err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, c)
+	})
+	mux.HandleFunc("POST /api/writeallow", func(w http.ResponseWriter, r *http.Request) {
+		var req WriteAllowChange
+		if err := decodeJSON(w, r, &req); err != nil {
+			writeJSON(w, http.StatusBadRequest, apiError{"ungültige Anfrage: " + err.Error()})
+			return
+		}
+		c, err := s.applyWriteAllow(req.WriteAllow)
+		if err != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, apiError{err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, c)
+	})
 	mux.HandleFunc("POST /api/mapping", func(w http.ResponseWriter, r *http.Request) {
 		req, err := decodeChange(w, r)
 		if err != nil {
@@ -243,25 +270,130 @@ const maxChangeBody = 16 << 10
 // HTML form, which closes the remaining gap for simple cross-site posts.
 func decodeChange(w http.ResponseWriter, r *http.Request) (MappingChange, error) {
 	var req MappingChange
+	err := decodeJSON(w, r, &req)
+	return req, err
+}
+
+func decodeJSON(w http.ResponseWriter, r *http.Request, v any) error {
 	if r.Header.Get("Origin") != "" {
-		return req, errors.New("Origin-Kopf nicht erlaubt")
+		return errors.New("Origin-Kopf nicht erlaubt")
 	}
-	if v := r.Header.Get("Sec-Fetch-Site"); v != "" && v != "same-origin" && v != "none" {
-		return req, errors.New("seitenfremde Anfrage")
+	if f := r.Header.Get("Sec-Fetch-Site"); f != "" && f != "same-origin" && f != "none" {
+		return errors.New("seitenfremde Anfrage")
 	}
 	ct := r.Header.Get("Content-Type")
 	if mt, _, err := mime.ParseMediaType(ct); err != nil || mt != "application/json" {
-		return req, errors.New("Content-Type muss application/json sein")
+		return errors.New("Content-Type muss application/json sein")
 	}
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxChangeBody))
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(&req); err != nil {
-		return req, err
+	if err := dec.Decode(v); err != nil {
+		return err
 	}
 	if err := dec.Decode(&struct{}{}); err != io.EOF {
-		return req, errors.New("Daten nach dem JSON-Objekt")
+		return errors.New("Daten nach dem JSON-Objekt")
 	}
-	return req, nil
+	return nil
+}
+
+// WriteAllowChange replaces the list of clients that may write.
+type WriteAllowChange struct {
+	WriteAllow []string `json:"write_allow"`
+}
+
+// configView is what the page shows of config.json.
+type configView struct {
+	Port       int      `json:"port"`
+	WriteAllow []string `json:"write_allow"`
+	PollMS     int      `json:"poll_interval_ms"`
+}
+
+func (s *service) configView() (configView, error) {
+	c, err := loadConfig(s.cfgPath)
+	if err != nil {
+		return configView{}, err
+	}
+	if c.WriteAllow == nil {
+		c.WriteAllow = []string{}
+	}
+	return configView{Port: c.Port, WriteAllow: c.WriteAllow, PollMS: c.PollIntervalMS}, nil
+}
+
+// applyWriteAllow validates the list, saves config.json atomically and
+// only then activates it (SetWriter cannot fail). Other settings in the
+// file are kept.
+func (s *service) applyWriteAllow(list []string) (configView, error) {
+	s.editMu.Lock()
+	defer s.editMu.Unlock()
+	if s.setter == nil || s.cfgPath == "" {
+		return configView{}, errors.New("Schreiben ist in diesem Modus nicht verfügbar")
+	}
+	if len(list) > 64 {
+		return configView{}, errors.New("höchstens 64 Einträge")
+	}
+	clean := []string{}
+	for _, v := range list {
+		if v = strings.TrimSpace(v); v != "" {
+			clean = append(clean, v)
+		}
+	}
+	allow, err := engine.ParseAllow(clean)
+	if err != nil {
+		return configView{}, err
+	}
+	raw, err := os.ReadFile(s.cfgPath)
+	if err != nil {
+		return configView{}, fmt.Errorf("Konfiguration nicht lesbar: %w", err)
+	}
+	c, err := loadConfig(s.cfgPath)
+	if err != nil {
+		return configView{}, err
+	}
+	// keep every field of the file, change only write_allow
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return configView{}, err
+	}
+	enc, _ := json.Marshal(engine.FormatAllow(allow))
+	doc["write_allow"] = enc
+	out, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		return configView{}, err
+	}
+	// saved first, then active: a list that is not on disk never applies
+	if err := writeFileAtomic(s.cfgPath, append(out, '\n'), 0o600); err != nil {
+		return configView{}, fmt.Errorf("Speichern fehlgeschlagen: %w", err)
+	}
+	next := s.wcfg
+	next.Allow = allow
+	s.eng.SetWriter(s.setter, next)
+	s.wcfg = next
+	return configView{Port: c.Port, WriteAllow: engine.FormatAllow(allow), PollMS: c.PollIntervalMS}, nil
+}
+
+func writeFileAtomic(path string, b []byte, mode os.FileMode) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".tmp-*")
+	if err != nil {
+		return err
+	}
+	name := tmp.Name()
+	defer os.Remove(name)
+	if _, err := tmp.Write(b); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(mode); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(name, path)
 }
 
 func (s *service) saveMapping(m *mapping.File) error {
@@ -310,10 +442,11 @@ func findObject(cat *rega.Catalog, key string) (mapping.Entry, *float64, *float6
 	return mapping.Entry{}, nil, nil, 0, false, "", fmt.Errorf("Objekt %q nicht in der Geräteliste", key)
 }
 
-// applyChange validates a change, activates it in the engine and only
-// then saves it atomically. If saving fails, the previous mapping is
-// activated again, so the running state always equals the file.
-// Any error leaves everything unchanged.
+// applyChange validates a change and checks that the engine will accept
+// it, then saves it atomically and only then activates it. So Modbus
+// never serves (or writes through) a mapping that is not on disk. If the
+// activation still fails, the previous file is restored. Any error leaves
+// everything unchanged.
 //
 // Catalog ownership: s.cat is the service's copy for lookups; the engine
 // keeps its own clone (SetCatalog clones), so neither can change the other.
@@ -376,15 +509,18 @@ func (s *service) applyChange(req MappingChange) (*mapping.File, error) {
 	if err := m.Validate(statusLen); err != nil {
 		return nil, err
 	}
-	prev := s.eng.Mapping()
-	if err := s.eng.SetMapping(m); err != nil {
+	if err := s.eng.CheckMapping(m); err != nil {
 		return nil, err
 	}
+	prev := s.eng.Mapping()
 	if err := s.saveMapping(m); err != nil {
-		if rerr := s.eng.SetMapping(prev); rerr != nil {
-			log.Printf("api: rollback failed: %v", rerr)
-		}
 		return nil, fmt.Errorf("Speichern fehlgeschlagen: %w", err)
+	}
+	if err := s.eng.SetMapping(m); err != nil {
+		if rerr := s.saveMapping(prev); rerr != nil {
+			log.Printf("api: restoring mapping file failed: %v", rerr)
+		}
+		return nil, err
 	}
 	return s.eng.Mapping(), nil
 }

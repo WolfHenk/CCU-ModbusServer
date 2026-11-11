@@ -90,12 +90,14 @@ type Engine struct {
 	byAddr map[addrKey]int // area+address -> index into objs
 	tab    *table.Table
 	last   map[string]lastWords // last good words per entry key
-	// idKey remembers which entry a ReGa ID belonged to; stale holds IDs
-	// whose cached reading may belong to a different object after a
-	// rebuild (ID reused for another key). They count as "not read yet"
-	// until the next completed poll cycle.
+	// idKey remembers which entry a ReGa ID last belonged to (kept across
+	// rebuilds, so A -> gone -> B is noticed too). stale holds IDs whose
+	// cached reading may belong to a different object, with the time of
+	// the rebuild that reassigned them. Such an ID counts as "not read
+	// yet" until the poller has read THIS ID in a cycle that started
+	// after that rebuild (ReadAt per ID); other cycles do not clear it.
 	idKey map[int]string
-	stale map[int]bool
+	stale map[int]time.Time
 
 	// write path
 	wsrc      ValueSetter
@@ -133,7 +135,7 @@ func New(m *mapping.File, pol Poller, sink TableSink, statusSlots []table.Slot, 
 		StatusSlots: statusSlots, MaxAge: maxAge,
 		pol: pol, sink: sink, rec: quality.NewReception(),
 		last: map[string]lastWords{}, started: time.Now(),
-		lastWrite: map[string]time.Time{}, idKey: map[int]string{}, stale: map[int]bool{},
+		lastWrite: map[string]time.Time{}, idKey: map[int]string{}, stale: map[int]time.Time{},
 	}
 	e.rebuildMu.Lock()
 	defer e.rebuildMu.Unlock()
@@ -290,10 +292,16 @@ func (e *Engine) rebuild(m *mapping.File, cat *rega.Catalog) error {
 
 	e.mu.Lock()
 	// IDs that now belong to a different entry than before: their cached
-	// reading is not trusted until the next completed cycle.
+	// reading is not trusted until read again after this moment.
+	at := time.Now()
 	for id, k := range idKey {
 		if old, ok := e.idKey[id]; ok && old != k {
-			e.stale[id] = true
+			e.stale[id] = at
+		}
+	}
+	for id, k := range e.idKey {
+		if _, ok := idKey[id]; !ok {
+			idKey[id] = k // keep the history of IDs no longer exported
 		}
 	}
 	// The new table is complete BEFORE anybody sees it: status block
@@ -335,15 +343,38 @@ func (e *Engine) Exports() int {
 	return len(e.objs)
 }
 
+// isStale reports whether the cached reading of id may still belong to
+// the object the ID had before the last reassignment. e.mu must be held.
+func (e *Engine) isStale(id int) bool {
+	at, ok := e.stale[id]
+	if !ok {
+		return false
+	}
+	if e.pol.ReadAt(id).After(at) {
+		delete(e.stale, id) // read again after the reassignment
+		return false
+	}
+	return true
+}
+
+// CheckMapping tells whether SetMapping(m) would be accepted, without
+// changing anything. The API uses it to persist only mappings that can
+// be activated.
+func (e *Engine) CheckMapping(m *mapping.File) error {
+	c := m.Clone()
+	if err := c.Validate(len(e.StatusSlots)); err != nil {
+		return err
+	}
+	if _, err := table.New(c.Layout(e.StatusSlots)); err != nil {
+		return fmt.Errorf("table layout: %w", err)
+	}
+	return nil
+}
+
 // OnCycle is the poller callback.
 func (e *Engine) OnCycle(values map[int]rega.Reading, _ poller.Health) {
 	if values != nil {
 		e.rec.Observe(values)
-		// a completed cycle of the current selection: cached readings
-		// belong to the current entries again
-		e.mu.Lock()
-		e.stale = map[int]bool{}
-		e.mu.Unlock()
 	}
 	e.Refresh(time.Now())
 }
@@ -370,7 +401,7 @@ func (e *Engine) fill(tab *table.Table, objs []object, wordOrder string, values 
 			reason := quality.Missing
 			if o.regaID != 0 {
 				reason = quality.Judge(o.regaID, values, h.LastOK, e.MaxAge, now)
-				if e.stale[o.regaID] {
+				if e.isStale(o.regaID) {
 					reason = quality.Unknown
 				}
 			}

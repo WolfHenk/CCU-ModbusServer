@@ -342,7 +342,9 @@ func main() {
 		if err != nil {
 			log.Fatalf("mapping: %v", err)
 		}
-		eng.SetWriter(ds, engine.WriteConfig{Allow: allow})
+		wcfg := engine.WriteConfig{Allow: allow}
+		eng.SetWriter(ds, wcfg)
+		svc.cfgPath, svc.setter, svc.wcfg = *cfgPath, ds, wcfg
 		srv = modbus.NewServer(srvCfg, eng.Table(), eng)
 		eng.SetSink(srv)
 		svc.eng, svc.mapPath = eng, mapPath
