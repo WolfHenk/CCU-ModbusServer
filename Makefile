@@ -50,7 +50,7 @@ package: test build source
 	cp packaging/bin/update_addon packaging/bin/firewall build/pkg/bin/
 	cp packaging/update_script build/pkg/
 	cp packaging/rc.d/ccu-modbusserver build/pkg/rc.d/
-	cp packaging/www/*.cgi packaging/www/style.css build/pkg/www/
+	cp packaging/www/*.cgi packaging/www/style.css packaging/www/app.js build/pkg/www/
 	cp packaging/www/img/modbus-logo*.png build/pkg/www/img/
 	cp packaging/lib/session.tcl build/pkg/lib/
 	cp packaging/examples/config.json build/pkg/examples/

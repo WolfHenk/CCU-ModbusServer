@@ -46,7 +46,7 @@ fi
 mkdir -p "$BASE/bin" "$BASE/www/img" "$BASE/lib" "$BASE/source" "$CFGDIR" "$WEBDIR" "$RCDIR"
 cp "$SRC" "$BASE/bin/ccu-modbusserverd"
 cp -f bin/update_addon bin/firewall "$BASE/bin/"
-cp -f www/*.cgi www/*.css "$BASE/www/"
+cp -f www/*.cgi www/*.css www/*.js "$BASE/www/"
 cp -f www/img/modbus-logo*.png "$BASE/www/img/"
 cp -f lib/session.tcl "$BASE/lib/"
 cp -f VERSION LICENSE "$BASE/"
@@ -54,7 +54,7 @@ cp -R source/. "$BASE/source/"
 # The add-on manager may run this with umask 077: set modes explicitly.
 chmod 755 "$BASE" "$BASE/bin" "$BASE/www" "$BASE/www/img" "$BASE/lib" "$BASE/source"
 chmod 755 "$BASE/bin/"* "$BASE/www/"*.cgi
-chmod 644 "$BASE/VERSION" "$BASE/LICENSE" "$BASE/lib/session.tcl" "$BASE/www/"*.css "$BASE/www/img/"*.png
+chmod 644 "$BASE/VERSION" "$BASE/LICENSE" "$BASE/lib/session.tcl" "$BASE/www/"*.css "$BASE/www/"*.js "$BASE/www/img/"*.png
 chmod -R a+rX "$BASE/source"
 cp -f rc.d/$ADDON "$RCDIR/$ADDON"
 chmod 755 "$RCDIR/$ADDON"
