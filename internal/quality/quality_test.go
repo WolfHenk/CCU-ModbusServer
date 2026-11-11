@@ -124,40 +124,60 @@ func TestUnreachIDsAndPollIDs(t *testing.T) {
 func TestReception(t *testing.T) {
 	r := NewReception()
 	base := int64(1_000_000)
-	// periodic sensor: an update every 180 s
-	for i := int64(0); i <= 5; i++ {
-		r.Observe(map[int]rega.Reading{1: {Found: true, Timestamp: base + 180*i}})
-		// polling the unchanged value again is not a new reception
-		r.Observe(map[int]rega.Reading{1: {Found: true, Timestamp: base + 180*i}})
+	// periodic sensor: an update about every 180 s (with jitter)
+	jitter := []int64{0, 5, -7, 3, 0, -4, 6, 2, -1, 0}
+	ts := base
+	for i := 0; i < len(jitter); i++ {
+		ts += 180 + jitter[i]
+		r.Observe(map[int]rega.Reading{1: {Found: true, Timestamp: ts}})
+		// polling the unchanged value again is not a new update
+		r.Observe(map[int]rega.Reading{1: {Found: true, Timestamp: ts}})
 	}
-	last := base + 900
-	info := r.Info(1, time.Unix(last+60, 0))
-	if info.Samples != 5 || info.Typical != 180 || info.Overdue != TriNo || info.LastUpdate != last {
+	// the first observation only sets the start point
+	info := r.Info(1, time.Unix(ts+60, 0))
+	if info.Samples != len(jitter)-1 || info.Periodic != TriYes || info.Typical < 170 || info.Typical > 190 || info.Overdue != TriNo || info.LastUpdate != ts {
 		t.Fatalf("periodic: %+v", info)
 	}
-	if info := r.Info(1, time.Unix(last+3*180+1, 0)); info.Overdue != TriYes {
+	if info := r.Info(1, time.Unix(ts+3*190+1, 0)); info.Overdue != TriYes {
 		t.Fatalf("periodic silent: %+v", info)
 	}
-	// event-driven contact: two updates only -> no statement
-	r.Observe(map[int]rega.Reading{2: {Found: true, Timestamp: base}})
-	r.Observe(map[int]rega.Reading{2: {Found: true, Timestamp: base + 86400}})
-	if info := r.Info(2, time.Unix(base+10*86400, 0)); info.Overdue != TriUnknown || info.Typical != 0 {
+
+	// Regression (ChatGPT review 0.2.3, B): an event-driven contact with
+	// random actuations must never become "overdue", even with many
+	// observations.
+	random := []int64{40, 3600, 7, 86400, 300, 12, 5000, 90000, 60, 2}
+	ts = base
+	r.Observe(map[int]rega.Reading{2: {Found: true, Timestamp: ts}})
+	for _, d := range random {
+		ts += d
+		r.Observe(map[int]rega.Reading{2: {Found: true, Timestamp: ts}})
+	}
+	info = r.Info(2, time.Unix(ts+30*86400, 0))
+	if info.Periodic != TriNo || info.Overdue != TriUnknown || info.Typical != 0 {
 		t.Fatalf("event driven: %+v", info)
 	}
+	// only four regular intervals are not enough
+	ts = base
+	for i := 0; i < 5; i++ {
+		r.Observe(map[int]rega.Reading{3: {Found: true, Timestamp: ts}})
+		ts += 100
+	}
+	if info := r.Info(3, time.Unix(ts+100000, 0)); info.Overdue != TriUnknown || info.Periodic != TriUnknown {
+		t.Fatalf("too few samples: %+v", info)
+	}
 	// never set and missing are ignored
-	r.Observe(map[int]rega.Reading{3: {Found: true, Timestamp: 0}, 4: {}})
-	if info := r.Info(3, time.Now()); info.LastUpdate != 0 {
+	r.Observe(map[int]rega.Reading{4: {Found: true, Timestamp: 0}, 5: {}})
+	if info := r.Info(4, time.Now()); info.LastUpdate != 0 {
 		t.Fatalf("never set tracked: %+v", info)
 	}
 	r.Forget(map[int]bool{2: true})
 	if info := r.Info(1, time.Now()); info.Samples != 0 {
 		t.Fatal("forgotten object still tracked")
 	}
-	// at most keepIntervals intervals are kept
 	for i := int64(1); i <= 40; i++ {
-		r.Observe(map[int]rega.Reading{5: {Found: true, Timestamp: base + 10*i}})
+		r.Observe(map[int]rega.Reading{6: {Found: true, Timestamp: base + 10*i}})
 	}
-	if info := r.Info(5, time.Unix(base+400, 0)); info.Samples != keepIntervals {
+	if info := r.Info(6, time.Unix(base+400, 0)); info.Samples != keepIntervals {
 		t.Fatalf("kept %d intervals", info.Samples)
 	}
 }
@@ -172,5 +192,9 @@ func TestTexts(t *testing.T) {
 		if c.String() == "unbekannt" {
 			t.Errorf("comm %d without text", c)
 		}
+	}
+	// Regression (ChatGPT review 0.2.3, C): neutral wording, no direction.
+	if s := CommUnreach.String(); s != "CCU meldet Kommunikationsstörung (UNREACH)" {
+		t.Errorf("unreach text %q", s)
 	}
 }

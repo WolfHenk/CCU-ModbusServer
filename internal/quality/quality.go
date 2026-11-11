@@ -117,7 +117,7 @@ func (c Comm) String() string {
 	case CommOK:
 		return "erreichbar"
 	case CommUnreach:
-		return "Warnung: Gerät meldet „nicht erreichbar“ (Senden/Quittung gestört)"
+		return "CCU meldet Kommunikationsstörung (UNREACH)"
 	case CommUnknown:
 		return "Erreichbarkeit unbekannt"
 	}
@@ -202,17 +202,22 @@ const (
 
 // Reception settings.
 const (
-	keepIntervals = 16 // observed update intervals kept per object
-	minSamples    = 4  // intervals needed before "overdue" is judged
-	overdueFactor = 3  // overdue when silent for > factor x typical interval
+	keepIntervals  = 16   // observed update intervals kept per object
+	minPeriodic    = 8    // intervals needed before an object can count as periodic
+	periodicShare  = 0.75 // share of intervals that must be close to the median
+	periodicSpread = 0.5  // "close" = within +-50 % of the median
+	overdueFactor  = 3    // overdue when silent for > factor x typical interval
 )
 
-// ReceptionInfo describes the observed updates of one object.
+// ReceptionInfo describes the observed ReGa updates of one object. It is
+// an observation of ReGa timestamp changes, not proof of radio telegrams
+// (a ReGa datapoint can also be updated by programs or virtual devices).
 type ReceptionInfo struct {
 	LastUpdate int64 `json:"last_update"` // ReGa timestamp, Unix s, 0 = none
-	Typical    int64 `json:"typical_s"`   // median interval in s, 0 = not enough data
 	Samples    int   `json:"samples"`     // number of observed intervals
-	Overdue    Tri   `json:"overdue"`     // 0 unknown, 1 no, 2 yes
+	Periodic   Tri   `json:"periodic"`    // regular update rhythm observed?
+	Typical    int64 `json:"typical_s"`   // median interval in s, only if periodic
+	Overdue    Tri   `json:"overdue"`     // only judged for periodic objects
 }
 
 type track struct {
@@ -220,12 +225,12 @@ type track struct {
 	intervals []int64
 }
 
-// Reception learns, per object, how often ReGa receives updates. It is
-// an observation, not a guarantee: the typical interval is the median of
-// the last observed intervals since the add-on started, and "overdue" is
-// only stated after enough observations. Objects that change only on
-// events (switches, contacts) usually never reach "overdue: yes" — which
-// is correct, because silence is normal for them.
+// Reception learns, per object, how often ReGa receives updates. An
+// object counts as periodic only after minPeriodic intervals of which at
+// least periodicShare lie within periodicSpread of their median. Only
+// periodic objects get an "overdue" judgement; for everything else
+// (event-driven contacts, switches, too few observations) it stays
+// unknown, so random actuations never produce a false alarm.
 type Reception struct {
 	mu sync.Mutex
 	m  map[int]*track
@@ -268,6 +273,28 @@ func (r *Reception) Forget(keep map[int]bool) {
 	}
 }
 
+// periodic returns the median interval and whether the intervals are
+// regular enough to call the object periodic.
+func periodic(intervals []int64) (int64, bool) {
+	if len(intervals) < minPeriodic {
+		return 0, false
+	}
+	s := append([]int64(nil), intervals...)
+	sort.Slice(s, func(i, j int) bool { return s[i] < s[j] })
+	med := s[len(s)/2]
+	if med <= 0 {
+		return 0, false
+	}
+	close := 0
+	for _, x := range s {
+		d := float64(x-med) / float64(med)
+		if d >= -periodicSpread && d <= periodicSpread {
+			close++
+		}
+	}
+	return med, float64(close) >= periodicShare*float64(len(s))
+}
+
 // Info returns what is known about the updates of one object.
 func (r *Reception) Info(id int, now time.Time) ReceptionInfo {
 	r.mu.Lock()
@@ -277,13 +304,17 @@ func (r *Reception) Info(id int, now time.Time) ReceptionInfo {
 		return ReceptionInfo{}
 	}
 	info := ReceptionInfo{LastUpdate: t.last, Samples: len(t.intervals)}
-	if len(t.intervals) < minSamples {
-		return info
+	if len(t.intervals) < minPeriodic {
+		return info // periodic, typical, overdue: unknown
 	}
-	s := append([]int64(nil), t.intervals...)
-	sort.Slice(s, func(i, j int) bool { return s[i] < s[j] })
-	info.Typical = s[len(s)/2]
-	if now.Unix()-t.last > overdueFactor*info.Typical {
+	med, ok := periodic(t.intervals)
+	if !ok {
+		info.Periodic = TriNo
+		return info // not periodic: overdue stays unknown
+	}
+	info.Periodic = TriYes
+	info.Typical = med
+	if now.Unix()-t.last > overdueFactor*med {
 		info.Overdue = TriYes
 	} else {
 		info.Overdue = TriNo

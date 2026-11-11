@@ -32,6 +32,7 @@ import (
 )
 
 type fakeSource struct {
+	blockErr error         // returned by the blocked read
 	block    chan struct{} // if set, the first read waits until it is closed
 	started  chan struct{} // closed when the blocking read has started
 	mu       sync.Mutex
@@ -51,12 +52,15 @@ func (f *fakeSource) ReadValues(ctx context.Context, ids []int) (map[int]rega.Re
 	}
 	defer f.active.Add(-1)
 	f.mu.Lock()
-	block, started := f.block, f.started
+	block, started, blockErr := f.block, f.started, f.blockErr
 	f.block = nil
 	f.mu.Unlock()
 	if block != nil {
 		close(started)
 		<-block
+		if blockErr != nil {
+			return nil, blockErr
+		}
 	}
 	if f.sleep > 0 {
 		time.Sleep(f.sleep)
@@ -307,5 +311,29 @@ func TestCycleDuringSetItemsIsDiscarded(t *testing.T) {
 		if _, ok := c[1]; ok {
 			t.Fatal("OnCycle saw the discarded result")
 		}
+	}
+}
+
+// Regression (ChatGPT review 0.2.3, A): a FAILED read of an old selection
+// must not count as failure or cause backoff for the new selection.
+func TestFailedCycleDuringSetItemsIsDiscarded(t *testing.T) {
+	block := make(chan struct{})
+	started := make(chan struct{})
+	src := &fakeSource{block: block, started: started, blockErr: errors.New("old read failed")}
+	p := New(src, Config{Interval: time.Hour, BackoffMin: time.Hour})
+	p.SetItems([]int{1, 2})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go p.Run(ctx)
+	<-started
+	p.SetItems([]int{2, 3})
+	close(block)
+	waitFor(t, func() bool { return p.Health().Cycles >= 1 })
+	h := p.Health()
+	if h.Failures != 0 || !h.OK || h.Cycles != 1 {
+		t.Fatalf("old failure leaked into health: %+v", h)
+	}
+	if v, _ := p.Values(); !v[3].Found {
+		t.Fatalf("new selection not read: %v", v)
 	}
 }

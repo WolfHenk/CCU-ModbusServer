@@ -223,11 +223,13 @@ func (p *Poller) Run(ctx context.Context) {
 
 		var wait time.Duration
 		p.mu.Lock()
-		if err == nil && gen != p.gen {
+		if gen != p.gen {
 			// The selection changed while this cycle was reading: its
-			// result belongs to the old selection and is discarded (not
-			// even counted), so a removed ID can never come back. The new
-			// selection is read right away.
+			// result - success OR error - belongs to the old selection and
+			// is discarded (not counted, no backoff), so a removed ID can
+			// never come back and an old failure cannot delay the new
+			// selection. The new selection is read right away; if the
+			// source is really down, that read reports it.
 			p.mu.Unlock()
 			continue
 		}
