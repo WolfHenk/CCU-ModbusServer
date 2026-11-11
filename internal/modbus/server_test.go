@@ -77,7 +77,7 @@ type recBackend struct {
 	calls int
 }
 
-func (b *recBackend) WriteCoils(start int, v []bool) error {
+func (b *recBackend) WriteCoils(_ net.Addr, start int, v []bool) error {
 	b.mu.Lock()
 	b.calls++
 	err := b.err
@@ -85,10 +85,10 @@ func (b *recBackend) WriteCoils(start int, v []bool) error {
 	if err != nil {
 		return err
 	}
-	return table.Loopback{T: b.tab}.WriteCoils(start, v)
+	return table.Loopback{T: b.tab}.WriteCoils(nil, start, v)
 }
 
-func (b *recBackend) WriteRegisters(start int, v []uint16) error {
+func (b *recBackend) WriteRegisters(_ net.Addr, start int, v []uint16) error {
 	b.mu.Lock()
 	b.calls++
 	err := b.err
@@ -96,7 +96,7 @@ func (b *recBackend) WriteRegisters(start int, v []uint16) error {
 	if err != nil {
 		return err
 	}
-	return table.Loopback{T: b.tab}.WriteRegisters(start, v)
+	return table.Loopback{T: b.tab}.WriteRegisters(nil, start, v)
 }
 
 type fixture struct {
@@ -646,6 +646,27 @@ func TestIdleTimeout(t *testing.T) {
 func TestNoBackend(t *testing.T) {
 	tab, _ := table.New(testLayout())
 	s := NewServer(Config{}, tab, nil)
-	r := s.process(req(6, 0, 1), nil)
+	r := s.process(nil, req(6, 0, 1), nil)
 	wantEx(t, r, 6, ExServerDeviceFail)
+}
+
+func TestSetTable(t *testing.T) {
+	f := start(t, Config{})
+	c := f.dial(t)
+	f.tab.Update(func(w table.Writer) { w.Set(table.InputRegisters, 0, 7) })
+	if r := call(t, c, req(4, 0, 1)); !bytes.Equal(r, []byte{4, 2, 0, 7}) {
+		t.Fatalf("old table: % x", r)
+	}
+	var l table.Layout
+	l.Slots[table.InputRegisters] = []table.Slot{{Kind: table.Single}}
+	nt, _ := table.New(l)
+	nt.Update(func(w table.Writer) { w.Set(table.InputRegisters, 0, 9) })
+	f.srv.SetTable(nt)
+	if r := call(t, c, req(4, 0, 1)); !bytes.Equal(r, []byte{4, 2, 0, 9}) {
+		t.Fatalf("new table: % x", r)
+	}
+	wantEx(t, call(t, c, req(4, 1, 1)), 4, ExIllegalDataAddress)
+	if f.srv.Table() != nt {
+		t.Fatal("Table()")
+	}
 }

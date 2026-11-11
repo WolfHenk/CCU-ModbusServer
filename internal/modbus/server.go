@@ -29,6 +29,7 @@ import (
 	"io"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/WolfHenk/CCU-ModbusServer/internal/table"
@@ -68,9 +69,12 @@ func (e Exception) Error() string {
 // any other error sends exception 04. On success the backend is
 // responsible for updating the table (the table always shows the value
 // reported by the data source, not the value last written).
+//
+// client is the remote address of the Modbus connection (for an IP
+// allow list); it may be nil in tests.
 type Backend interface {
-	WriteCoils(start int, values []bool) error
-	WriteRegisters(start int, values []uint16) error
+	WriteCoils(client net.Addr, start int, values []bool) error
+	WriteRegisters(client net.Addr, start int, values []uint16) error
 }
 
 // Protocol limits from the Application Protocol Specification V1.1b3.
@@ -103,7 +107,7 @@ type Config struct {
 // Server is a Modbus TCP server bound to one table.
 type Server struct {
 	cfg     Config
-	tab     *table.Table
+	tab     atomic.Pointer[table.Table]
 	backend Backend
 
 	mu     sync.Mutex
@@ -125,8 +129,17 @@ func NewServer(cfg Config, tab *table.Table, backend Backend) *Server {
 	if cfg.FrameTimeout <= 0 {
 		cfg.FrameTimeout = 5 * time.Second
 	}
-	return &Server{cfg: cfg, tab: tab, backend: backend, conns: map[net.Conn]struct{}{}}
+	s := &Server{cfg: cfg, backend: backend, conns: map[net.Conn]struct{}{}}
+	s.tab.Store(tab)
+	return s
 }
+
+// SetTable replaces the data table. Requests already being processed
+// finish with the old table; every later request uses the new one.
+func (s *Server) SetTable(t *table.Table) { s.tab.Store(t) }
+
+// Table returns the current data table.
+func (s *Server) Table() *table.Table { return s.tab.Load() }
 
 // ErrServerClosed is returned by Serve after Close.
 var ErrServerClosed = errors.New("modbus: server closed")
@@ -237,7 +250,7 @@ func (s *Server) handle(c net.Conn) {
 			continue
 		}
 
-		resp := s.process(req, out[7:7])
+		resp := s.process(c.RemoteAddr(), req, out[7:7])
 		binary.BigEndian.PutUint16(out[0:2], tid)
 		binary.BigEndian.PutUint16(out[2:4], 0)
 		binary.BigEndian.PutUint16(out[4:6], uint16(len(resp)+1))
@@ -256,7 +269,8 @@ func exception(dst []byte, fc byte, e Exception) []byte {
 // process handles one request PDU and appends the response PDU to dst.
 // Checks follow the order of the specification state diagrams: function
 // code (01), quantity and byte count (03), address (02), execution (04).
-func (s *Server) process(req []byte, dst []byte) []byte {
+func (s *Server) process(client net.Addr, req []byte, dst []byte) []byte {
+	tab := s.tab.Load()
 	fc := req[0]
 	d := req[1:]
 	switch fc {
@@ -273,7 +287,7 @@ func (s *Server) process(req []byte, dst []byte) []byte {
 		if qty < 1 || qty > MaxReadBits {
 			return exception(dst, fc, ExIllegalDataValue)
 		}
-		vals, err := s.tab.Read(area, start, qty)
+		vals, err := tab.Read(area, start, qty)
 		if err != nil {
 			return exception(dst, fc, ExIllegalDataAddress)
 		}
@@ -303,7 +317,7 @@ func (s *Server) process(req []byte, dst []byte) []byte {
 		if qty < 1 || qty > MaxReadRegisters {
 			return exception(dst, fc, ExIllegalDataValue)
 		}
-		vals, err := s.tab.Read(area, start, qty)
+		vals, err := tab.Read(area, start, qty)
 		if err != nil {
 			return exception(dst, fc, ExIllegalDataAddress)
 		}
@@ -322,10 +336,10 @@ func (s *Server) process(req []byte, dst []byte) []byte {
 		if v != 0x0000 && v != 0xFF00 {
 			return exception(dst, fc, ExIllegalDataValue)
 		}
-		if err := s.tab.CheckWrite(table.Coils, addr, 1); err != nil {
+		if err := tab.CheckWrite(table.Coils, addr, 1); err != nil {
 			return exception(dst, fc, ExIllegalDataAddress)
 		}
-		if e := s.writeCoils(addr, []bool{v == 0xFF00}); e != 0 {
+		if e := s.writeCoils(client, addr, []bool{v == 0xFF00}); e != 0 {
 			return exception(dst, fc, e)
 		}
 		return append(dst, req...)
@@ -336,10 +350,10 @@ func (s *Server) process(req []byte, dst []byte) []byte {
 		}
 		addr := int(binary.BigEndian.Uint16(d[0:2]))
 		v := binary.BigEndian.Uint16(d[2:4])
-		if err := s.tab.CheckWrite(table.HoldingRegisters, addr, 1); err != nil {
+		if err := tab.CheckWrite(table.HoldingRegisters, addr, 1); err != nil {
 			return exception(dst, fc, ExIllegalDataAddress)
 		}
-		if e := s.writeRegisters(addr, []uint16{v}); e != 0 {
+		if e := s.writeRegisters(client, addr, []uint16{v}); e != 0 {
 			return exception(dst, fc, e)
 		}
 		return append(dst, req...)
@@ -354,14 +368,14 @@ func (s *Server) process(req []byte, dst []byte) []byte {
 		if qty < 1 || qty > MaxWriteBits || bc != (qty+7)/8 || len(d) != 5+bc {
 			return exception(dst, fc, ExIllegalDataValue)
 		}
-		if err := s.tab.CheckWrite(table.Coils, start, qty); err != nil {
+		if err := tab.CheckWrite(table.Coils, start, qty); err != nil {
 			return exception(dst, fc, ExIllegalDataAddress)
 		}
 		vals := make([]bool, qty)
 		for i := range vals {
 			vals[i] = d[5+i/8]&(1<<(i%8)) != 0
 		}
-		if e := s.writeCoils(start, vals); e != 0 {
+		if e := s.writeCoils(client, start, vals); e != 0 {
 			return exception(dst, fc, e)
 		}
 		return append(dst, req[:5]...)
@@ -376,14 +390,14 @@ func (s *Server) process(req []byte, dst []byte) []byte {
 		if qty < 1 || qty > MaxWriteRegisters || bc != 2*qty || len(d) != 5+bc {
 			return exception(dst, fc, ExIllegalDataValue)
 		}
-		if err := s.tab.CheckWrite(table.HoldingRegisters, start, qty); err != nil {
+		if err := tab.CheckWrite(table.HoldingRegisters, start, qty); err != nil {
 			return exception(dst, fc, ExIllegalDataAddress)
 		}
 		vals := make([]uint16, qty)
 		for i := range vals {
 			vals[i] = binary.BigEndian.Uint16(d[5+2*i:])
 		}
-		if e := s.writeRegisters(start, vals); e != 0 {
+		if e := s.writeRegisters(client, start, vals); e != 0 {
 			return exception(dst, fc, e)
 		}
 		return append(dst, req[:5]...)
@@ -402,16 +416,16 @@ func backendException(err error) Exception {
 	return ExServerDeviceFail
 }
 
-func (s *Server) writeCoils(start int, vals []bool) Exception {
+func (s *Server) writeCoils(client net.Addr, start int, vals []bool) Exception {
 	if s.backend == nil {
 		return ExServerDeviceFail
 	}
-	return backendException(s.backend.WriteCoils(start, vals))
+	return backendException(s.backend.WriteCoils(client, start, vals))
 }
 
-func (s *Server) writeRegisters(start int, vals []uint16) Exception {
+func (s *Server) writeRegisters(client net.Addr, start int, vals []uint16) Exception {
 	if s.backend == nil {
 		return ExServerDeviceFail
 	}
-	return backendException(s.backend.WriteRegisters(start, vals))
+	return backendException(s.backend.WriteRegisters(client, start, vals))
 }

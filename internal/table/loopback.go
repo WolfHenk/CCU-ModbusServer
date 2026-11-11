@@ -19,6 +19,8 @@
 
 package table
 
+import "net"
+
 // Loopback is a write backend that stores written values directly in the
 // table. It stands in for the CCU until the CCU connection exists
 // (stage 2) and is used by the test image (-demo) and the tests.
@@ -27,7 +29,7 @@ type Loopback struct {
 }
 
 // WriteCoils stores coil values.
-func (l Loopback) WriteCoils(start int, values []bool) error {
+func (l Loopback) WriteCoils(_ net.Addr, start int, values []bool) error {
 	l.T.Update(func(w Writer) {
 		for i, v := range values {
 			var x uint16
@@ -41,7 +43,7 @@ func (l Loopback) WriteCoils(start int, values []bool) error {
 }
 
 // WriteRegisters stores holding register values.
-func (l Loopback) WriteRegisters(start int, values []uint16) error {
+func (l Loopback) WriteRegisters(_ net.Addr, start int, values []uint16) error {
 	l.T.Update(func(w Writer) {
 		w.Set(HoldingRegisters, start, values...)
 	})
