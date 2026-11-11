@@ -129,7 +129,7 @@ func TestCheckFormat(t *testing.T) {
 		{rega.Action, Bit, 0, nil, nil, 0},
 		{rega.Enum, Uint16, 1, nil, nil, 8},
 		{rega.Integer, Int32, 1, f(0), f(255), 0},
-		{rega.Integer, Uint16, 1, nil, nil, 0},
+		{rega.Integer, Float32, 1, f(0), f(1000), 0},
 	}
 	for _, c := range ok {
 		if err := CheckFormat(c.t, c.f, c.scale, c.min, c.max, c.list); err != nil {
@@ -152,6 +152,15 @@ func TestCheckFormat(t *testing.T) {
 		{rega.Float, Float32, 10, nil, nil},
 		{rega.Integer, Int32, 0, nil, nil},
 		{rega.Integer, Int32, math.NaN(), nil, nil},
+		// Regression M3: conservative metadata handling
+		{rega.Integer, Uint16, 1, nil, nil},           // unknown range
+		{rega.Float, Int16, 10, f(math.NaN()), f(10)}, // NaN min
+		{rega.Float, Int32, 1, f(0), f(math.Inf(1))},  // Inf max
+		{rega.Float, Float32, 1, f(5), f(1)},          // min > max
+		{rega.Enum, Uint16, 1, nil, nil},              // no value list
+		{rega.Integer, Float32, 1, f(0), f(1 << 30)},  // float32 not exact
+		{rega.Integer, Float32, 1, nil, nil},          // float32, unknown range
+		{rega.Float, Int16, 2e6, f(0), f(1)},          // absurd scale
 	}
 	for _, c := range bad {
 		if err := CheckFormat(c.t, c.f, c.scale, c.min, c.max, 0); err == nil {
@@ -165,5 +174,59 @@ func TestCheckFormat(t *testing.T) {
 	}
 	if _, ok := DefaultFormat(rega.String); ok {
 		t.Error("default for string")
+	}
+}
+
+// Regression M1: a finite value beyond float32 must not become +Inf.
+func TestEncodeFloat32Overflow(t *testing.T) {
+	e := Entry{Type: rega.Float, Format: Float32}
+	for _, in := range []string{"1e100", "-1e100", "1e39"} {
+		w, ok := Encode(e, "ABCD", in)
+		if ok || !eq(w, NaNWords("ABCD")) {
+			t.Errorf("%s: %04x ok=%v", in, w, ok)
+		}
+	}
+	if _, ok := Encode(e, "ABCD", "3.4e38"); !ok {
+		t.Error("max float32 rejected")
+	}
+}
+
+// Regression M2: central write validation.
+func TestCheckWriteValue(t *testing.T) {
+	f := func(v float64) *float64 { return &v }
+	ok := []struct {
+		t        rega.Type
+		v        float64
+		min, max *float64
+		list     int
+	}{
+		{rega.Bool, 1, nil, nil, 0}, {rega.Bool, 0, nil, nil, 0}, {rega.Action, 1, nil, nil, 0},
+		{rega.Enum, 0, nil, nil, 3}, {rega.Enum, 2, nil, nil, 3},
+		{rega.Integer, 5, f(0), f(10), 0}, {rega.Float, 21.5, f(4.5), f(30.5), 0},
+		{rega.Float, 1e9, nil, nil, 0},
+	}
+	for _, c := range ok {
+		if err := CheckWriteValue(c.t, c.v, c.min, c.max, c.list); err != nil {
+			t.Errorf("%+v: %v", c, err)
+		}
+	}
+	bad := []struct {
+		t        rega.Type
+		v        float64
+		min, max *float64
+		list     int
+	}{
+		{rega.Bool, 2, nil, nil, 0}, {rega.Action, -1, nil, nil, 0},
+		{rega.Enum, 3, nil, nil, 3}, {rega.Enum, -1, nil, nil, 3}, {rega.Enum, 1.5, nil, nil, 3}, {rega.Enum, 0, nil, nil, 0},
+		{rega.Integer, 5.5, f(0), f(10), 0}, {rega.Integer, 11, f(0), f(10), 0}, {rega.Integer, -1, f(0), f(10), 0},
+		{rega.Float, 30.6, f(4.5), f(30.5), 0}, {rega.Float, 4.4, f(4.5), f(30.5), 0},
+		{rega.Float, math.NaN(), nil, nil, 0}, {rega.Float, math.Inf(1), nil, nil, 0},
+		{rega.Float, 1, f(math.NaN()), nil, 0},
+		{rega.String, 1, nil, nil, 0}, {rega.Other, 1, nil, nil, 0},
+	}
+	for _, c := range bad {
+		if err := CheckWriteValue(c.t, c.v, c.min, c.max, c.list); err == nil {
+			t.Errorf("accepted %+v", c)
+		}
 	}
 }

@@ -24,6 +24,7 @@
 package engine
 
 import (
+	"strconv"
 	"sync"
 	"time"
 
@@ -71,14 +72,31 @@ type Engine struct {
 	sink TableSink
 	rec  *quality.Reception
 
+	// rebuildMu serializes complete rebuilds including their external
+	// effects (poller selection, table hand-over), so a later change can
+	// never be overtaken by an earlier one.
+	rebuildMu sync.Mutex
+
 	mu      sync.Mutex
 	m       *mapping.File
 	cat     *rega.Catalog
 	objs    []object        // active entries
 	byAddr  map[addrKey]int // area+address -> index into objs
 	tab     *table.Table
-	last    map[string][]uint16 // last good words per entry key
+	last    map[string]lastWords // last good words per entry key
 	started time.Time
+}
+
+// lastWords is a substitute value together with the representation it
+// was encoded in; after a change of format, scale, type or word order it
+// is not used any more.
+type lastWords struct {
+	sig   string
+	words []uint16
+}
+
+func signature(en mapping.Entry, wordOrder string) string {
+	return string(en.Type) + "|" + string(en.Format) + "|" + strconv.FormatFloat(en.Scale, 'g', -1, 64) + "|" + wordOrder
 }
 
 type addrKey struct {
@@ -86,15 +104,21 @@ type addrKey struct {
 	addr int
 }
 
-// New creates an engine for a mapping.
-func New(m *mapping.File, pol Poller, sink TableSink, statusSlots []table.Slot, maxAge time.Duration) *Engine {
+// New creates an engine for a mapping. The mapping is copied and
+// validated.
+func New(m *mapping.File, pol Poller, sink TableSink, statusSlots []table.Slot, maxAge time.Duration) (*Engine, error) {
+	if err := m.Validate(len(statusSlots)); err != nil {
+		return nil, err
+	}
 	e := &Engine{
 		StatusSlots: statusSlots, MaxAge: maxAge,
 		pol: pol, sink: sink, rec: quality.NewReception(),
-		m: m, last: map[string][]uint16{}, started: time.Now(),
+		m: m.Clone(), last: map[string]lastWords{}, started: time.Now(),
 	}
+	e.rebuildMu.Lock()
+	defer e.rebuildMu.Unlock()
 	e.rebuild()
-	return e
+	return e, nil
 }
 
 // Reception returns the reception tracker (for the API).
@@ -109,25 +133,35 @@ func (e *Engine) Table() *table.Table {
 
 // SetCatalog resolves the entries against a new catalog.
 func (e *Engine) SetCatalog(cat *rega.Catalog) {
+	e.rebuildMu.Lock()
+	defer e.rebuildMu.Unlock()
 	e.mu.Lock()
 	e.cat = cat
 	e.mu.Unlock()
 	e.rebuild()
 }
 
-// SetMapping replaces the mapping (after a change in the WebUI).
-func (e *Engine) SetMapping(m *mapping.File) {
+// SetMapping replaces the mapping (after a change in the WebUI). The
+// mapping is copied and validated first; on error nothing changes.
+func (e *Engine) SetMapping(m *mapping.File) error {
+	c := m.Clone()
+	if err := c.Validate(len(e.StatusSlots)); err != nil {
+		return err
+	}
+	e.rebuildMu.Lock()
+	defer e.rebuildMu.Unlock()
 	e.mu.Lock()
-	e.m = m
+	e.m = c
 	e.mu.Unlock()
 	e.rebuild()
+	return nil
 }
 
-// Mapping returns the current mapping.
+// Mapping returns a copy of the current mapping.
 func (e *Engine) Mapping() *mapping.File {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return e.m
+	return e.m.Clone()
 }
 
 // resolve finds the CCU object of an entry. A system variable is found
@@ -203,20 +237,22 @@ func (e *Engine) rebuild() {
 	for i, o := range objs {
 		byAddr[addrKey{o.entry.Area, o.entry.Address}] = i
 	}
-	layout := work.Layout(e.StatusSlots)
-	tab, err := table.New(layout)
+	tab, err := table.New(work.Layout(e.StatusSlots))
 	if err != nil {
 		// A validated mapping always gives a valid layout; keep the old
 		// table rather than serving nothing.
 		e.mu.Unlock()
 		return
 	}
-	// carry the status block over
+	// The new table is complete BEFORE anybody sees it: status block
+	// carried over, values and bits filled from the current readings.
 	if e.tab != nil {
 		if v, err := e.tab.Read(table.InputRegisters, 0, len(e.StatusSlots)); err == nil {
 			tab.Update(func(w table.Writer) { w.Set(table.InputRegisters, 0, v...) })
 		}
 	}
+	values, h := e.pol.Values()
+	e.fill(tab, objs, work.WordOrder, values, h, time.Now())
 	e.objs, e.byAddr, e.tab = objs, byAddr, tab
 	keep := map[string]bool{}
 	for _, o := range objs {
@@ -229,11 +265,11 @@ func (e *Engine) rebuild() {
 	}
 	e.mu.Unlock()
 
+	// External effects, still under rebuildMu.
 	e.pol.SetItems(quality.PollIDs(ids, unreach))
 	if e.sink != nil {
 		e.sink.SetTable(tab)
 	}
-	e.Refresh(time.Now())
 }
 
 // Exports returns the number of active entries.
@@ -258,15 +294,21 @@ func (e *Engine) Refresh(now time.Time) {
 	values, h := e.pol.Values()
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	wordOrder := e.m.WordOrder
-	e.tab.Update(func(w table.Writer) {
-		for _, o := range e.objs {
+	e.fill(e.tab, e.objs, e.m.WordOrder, values, h, now)
+}
+
+// fill writes values and bits of objs into tab. e.mu must be held.
+func (e *Engine) fill(tab *table.Table, objs []object, wordOrder string, values map[int]rega.Reading, h poller.Health, now time.Time) {
+	tab.Update(func(w table.Writer) {
+		for _, o := range objs {
 			en := o.entry
-			reason := quality.Reason(quality.Unknown)
+			sig := signature(en, wordOrder)
+			if l, ok := e.last[en.Key]; ok && l.sig != sig {
+				delete(e.last, en.Key) // representation changed: old words are meaningless
+			}
+			reason := quality.Missing
 			if o.regaID != 0 {
 				reason = quality.Judge(o.regaID, values, h.LastOK, e.MaxAge, now)
-			} else {
-				reason = quality.Missing
 			}
 			valid := false
 			var words []uint16
@@ -275,17 +317,17 @@ func (e *Engine) Refresh(now time.Time) {
 				words, ok = mapping.Encode(en, wordOrder, values[o.regaID].Value)
 				if ok {
 					valid = true
-					e.last[en.Key] = words
+					e.last[en.Key] = lastWords{sig: sig, words: words}
 				}
 			}
 			if !valid {
 				// substitute: float32 NaN, otherwise the last good value
-				// (0 before the first one)
+				// in the same representation (0 before the first one)
 				switch {
 				case en.Format == mapping.Float32:
 					words = mapping.NaNWords(wordOrder)
-				case e.last[en.Key] != nil:
-					words = e.last[en.Key]
+				case e.last[en.Key].words != nil:
+					words = e.last[en.Key].words
 				default:
 					words = make([]uint16, max(1, en.Format.Words()))
 				}

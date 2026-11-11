@@ -20,18 +20,38 @@
 package mapping
 
 import (
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/WolfHenk/CCU-ModbusServer/internal/rega"
 	"github.com/WolfHenk/CCU-ModbusServer/internal/table"
 )
 
 const statusLen = 4
 
+// fill gives test entries a kind and a type that fit the format.
+func fill(e Entry) Entry {
+	if e.Kind == "" {
+		e.Kind = "dp"
+	}
+	if e.Type == "" {
+		switch e.Format {
+		case Bit:
+			e.Type = rega.Bool
+		case Float32:
+			e.Type = rega.Float
+		default:
+			e.Type = rega.Integer
+		}
+	}
+	return e
+}
+
 func mustAdd(t *testing.T, f *File, e Entry) *Entry {
 	t.Helper()
-	got, err := f.Add(e)
+	got, err := f.Add(fill(e))
 	if err != nil {
 		t.Fatalf("add %s: %v", e.Key, err)
 	}
@@ -140,7 +160,7 @@ func TestSaveLoadAndValidate(t *testing.T) {
 		t.Fatalf("missing file: %+v %v", f, err)
 	}
 	mustAdd(t, f, Entry{Key: "dp:A", Format: Float32, Label: "Außen"})
-	mustAdd(t, f, Entry{Key: "sv:950", Kind: "sv", SysVarID: 950, Format: Bit, Writable: true})
+	mustAdd(t, f, Entry{Key: "sv:950", Kind: "sv", SysVarID: 950, Type: rega.Bool, Format: Bit, Writable: true})
 	if err := f.Save(p); err != nil {
 		t.Fatal(err)
 	}
@@ -166,6 +186,20 @@ func TestSaveLoadAndValidate(t *testing.T) {
 		func(f *File) { f.Entries[0].Writable = true },
 		func(f *File) { f.WordOrder = "BADC" },
 		func(f *File) { f.Schema = 2 },
+		// Regression M4: manipulated counters must never reach Layout
+		func(f *File) { f.Next[table.HoldingRegisters] = -1 },
+		func(f *File) { f.Next[table.HoldingRegisters] = table.MaxSlots + 1 },
+		func(f *File) { f.Next[table.DiscreteInputs] = ValidBase + 1 },
+		func(f *File) { f.Next[table.InputRegisters] = 2 }, // inside status block
+		func(f *File) { f.NextExport = 0 },
+		func(f *File) { f.NextExport = MaxExports + 2 },
+		func(f *File) { f.Entries[0].Kind = "sv" },    // key/kind mismatch
+		func(f *File) { f.Entries[1].SysVarID = 951 }, // key does not match id
+		func(f *File) { f.Entries[0].Kind = "xx" },
+		func(f *File) { f.Entries[0].Type = rega.String }, // not offered
+		func(f *File) { f.Entries[0].Type = rega.Bool },   // bool as float32
+		func(f *File) { f.Entries[0].Scale = 10 },         // float32 with scale
+		func(f *File) { f.Entries[0].Key = "dp:" },
 	}
 	for i, mod := range bad {
 		g, _ := Load(p, statusLen)
@@ -184,15 +218,45 @@ func TestLimits(t *testing.T) {
 	f := New(statusLen)
 	f.Next[table.DiscreteInputs] = ValidBase - 1
 	mustAdd(t, f, Entry{Key: "dp:last", Format: Bit})
-	if _, err := f.Add(Entry{Key: "dp:full", Format: Bit}); err == nil {
+	if _, err := f.Add(fill(Entry{Key: "dp:full", Format: Bit})); err == nil {
 		t.Fatal("discrete inputs ran into the status bit block")
 	}
 	g := New(statusLen)
 	g.NextExport = MaxExports + 1
-	if _, err := g.Add(Entry{Key: "dp:x", Format: Uint16}); err == nil {
+	if _, err := g.Add(fill(Entry{Key: "dp:x", Format: Uint16})); err == nil {
 		t.Fatal("export limit not enforced")
 	}
-	if _, err := g.Add(Entry{Key: "dp:y", Format: "int8"}); err == nil {
+	if _, err := g.Add(fill(Entry{Key: "dp:y", Format: "int8"})); err == nil {
 		t.Fatal("unknown format accepted")
+	}
+}
+
+func TestAddRejectsInconsistentEntries(t *testing.T) {
+	f := New(statusLen)
+	for _, e := range []Entry{
+		{Key: "dp:a", Kind: "dp", Type: rega.Float, Format: Int16, Scale: -1},
+		{Key: "dp:b", Kind: "dp", Type: rega.Float, Format: Int16, Scale: math.Inf(1)},
+		{Key: "dp:c", Kind: "dp", Type: rega.Integer, Format: Int32, Scale: math.NaN()},
+		{Key: "dp:d", Kind: "dp", Type: rega.Action, Format: Bit},            // read-only action
+		{Key: "sv:1", Kind: "sv", SysVarID: 2, Type: rega.Bool, Format: Bit}, // key mismatch
+		{Key: "x", Kind: "dp", Type: rega.Bool, Format: Bit},
+	} {
+		if _, err := f.Add(e); err == nil {
+			t.Errorf("accepted %+v", e)
+		}
+	}
+	if len(f.Entries) != 0 || f.Next[table.InputRegisters] != statusLen || f.NextExport != 1 {
+		t.Fatalf("rejected entries changed the mapping: %+v", f)
+	}
+}
+
+func TestCloneIsDeep(t *testing.T) {
+	f := New(statusLen)
+	mustAdd(t, f, Entry{Key: "dp:A", Format: Uint16})
+	c := f.Clone()
+	c.Entries[0].Label = "x"
+	c.Next[table.InputRegisters] = 99
+	if f.Entries[0].Label == "x" || f.Next[table.InputRegisters] == 99 {
+		t.Fatal("clone shares state")
 	}
 }

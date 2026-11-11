@@ -60,9 +60,14 @@ func formatRange(f Format) (float64, float64) {
 	return 0, 1
 }
 
-// CheckFormat checks that a format and scale fit the CCU type and range.
-// min/max may be nil (unknown); then only the type is checked. For value
-// lists the index range 0..len-1 is used.
+// finite reports whether an optional bound is usable.
+func finite(p *float64) bool { return p != nil && !math.IsNaN(*p) && !math.IsInf(*p, 0) }
+
+// CheckFormat checks that a format and scale fit the CCU type and its
+// metadata. It is conservative: integer formats need a known, finite
+// range (or a value list); a value list must exist for ENUM; a float32
+// export of an integer type needs a range that float32 represents
+// exactly (|x| <= 2^24).
 func CheckFormat(t rega.Type, f Format, scale float64, min, max *float64, listLen int) error {
 	if !t.Offered() {
 		return fmt.Errorf("Typ %s wird nicht angeboten", t)
@@ -77,25 +82,81 @@ func CheckFormat(t rega.Type, f Format, scale float64, min, max *float64, listLe
 	if !f.Valid() {
 		return fmt.Errorf("unbekanntes Format %q", f)
 	}
+	if (min != nil && !finite(min)) || (max != nil && !finite(max)) {
+		return fmt.Errorf("Wertebereich der CCU ungültig")
+	}
+	if finite(min) && finite(max) && *min > *max {
+		return fmt.Errorf("Minimum größer als Maximum")
+	}
+	if t == rega.Enum {
+		if listLen < 1 {
+			return fmt.Errorf("Werteliste fehlt")
+		}
+		z, n := 0.0, float64(listLen-1)
+		min, max = &z, &n
+	}
 	if f == Float32 {
 		if scale != 1 {
 			return fmt.Errorf("Skalierung nur für Ganzzahlformate")
 		}
+		if t == rega.Integer || t == rega.Enum {
+			const exact = 1 << 24
+			if !finite(min) || !finite(max) || *min < -exact || *max > exact {
+				return fmt.Errorf("float32 kann diesen Ganzzahlbereich nicht exakt darstellen")
+			}
+		}
 		return nil
 	}
-	if scale <= 0 || math.IsNaN(scale) || math.IsInf(scale, 0) {
+	if !(scale > 0) || math.IsInf(scale, 0) || scale > 1e6 {
 		return fmt.Errorf("ungültige Skalierung %v", scale)
 	}
-	lo, hi := formatRange(f)
-	if t == rega.Enum && listLen > 0 {
-		z, n := 0.0, float64(listLen-1)
-		min, max = &z, &n
+	if !finite(min) || !finite(max) {
+		return fmt.Errorf("Wertebereich der CCU unbekannt: Ganzzahlformat nicht möglich")
 	}
-	if min != nil && *min*scale < lo {
+	lo, hi := formatRange(f)
+	if *min*scale < lo {
 		return fmt.Errorf("Minimum %v × %v passt nicht in %s", *min, scale, f)
 	}
-	if max != nil && *max*scale > hi {
+	if *max*scale > hi {
 		return fmt.Errorf("Maximum %v × %v passt nicht in %s", *max, scale, f)
+	}
+	return nil
+}
+
+// CheckWriteValue is the central check of a value written by a Modbus
+// client, before anything is sent to the CCU. ReGa's State() does not
+// enforce MIN/MAX, so this check is the only range protection.
+func CheckWriteValue(t rega.Type, v float64, min, max *float64, listLen int) error {
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return fmt.Errorf("keine endliche Zahl")
+	}
+	switch t {
+	case rega.Bool, rega.Action:
+		if v != 0 && v != 1 {
+			return fmt.Errorf("nur 0 oder 1 erlaubt")
+		}
+		return nil
+	case rega.Enum:
+		if v != math.Trunc(v) || v < 0 || int(v) >= listLen {
+			return fmt.Errorf("Index %v außerhalb der Werteliste (0..%d)", v, listLen-1)
+		}
+		return nil
+	case rega.Integer:
+		if v != math.Trunc(v) {
+			return fmt.Errorf("Ganzzahl erwartet")
+		}
+	case rega.Float:
+	default:
+		return fmt.Errorf("Typ %s ist nicht schreibbar", t)
+	}
+	if (min != nil && !finite(min)) || (max != nil && !finite(max)) {
+		return fmt.Errorf("Wertebereich der CCU ungültig")
+	}
+	if finite(min) && v < *min {
+		return fmt.Errorf("%v unter Minimum %v", v, *min)
+	}
+	if finite(max) && v > *max {
+		return fmt.Errorf("%v über Maximum %v", v, *max)
 	}
 	return nil
 }
@@ -143,6 +204,9 @@ func unorder(w []uint16, wordOrder string) uint32 {
 func Encode(e Entry, wordOrder string, value string) (words []uint16, ok bool) {
 	v, ok := parseCCU(e.Type, value)
 	if e.Format == Float32 {
+		if ok && math.Abs(v) > math.MaxFloat32 {
+			ok = false // not representable: would become +-Inf
+		}
 		f := float32(v)
 		if !ok {
 			f = float32(math.NaN())

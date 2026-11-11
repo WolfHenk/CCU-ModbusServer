@@ -39,9 +39,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/WolfHenk/CCU-ModbusServer/internal/rega"
 	"github.com/WolfHenk/CCU-ModbusServer/internal/table"
@@ -188,12 +190,33 @@ func (f *File) Validate(statusLen int) error {
 	if f.WordOrder != "ABCD" && f.WordOrder != "CDAB" {
 		return fmt.Errorf("invalid word order %q", f.WordOrder)
 	}
+	// Allocation counters: bounded, so a manipulated file can never cause
+	// huge allocations in Layout.
+	for a := table.Coils; a <= table.InputRegisters; a++ {
+		lim := table.MaxSlots
+		if a == table.DiscreteInputs {
+			lim = ValidBase
+		}
+		lo := 0
+		if a == table.InputRegisters {
+			lo = statusLen
+		}
+		if f.Next[a] < lo || f.Next[a] > lim {
+			return fmt.Errorf("next address for %s out of range: %d", a, f.Next[a])
+		}
+	}
+	if f.NextExport < 1 || f.NextExport > MaxExports+1 {
+		return fmt.Errorf("next export number out of range: %d", f.NextExport)
+	}
 	used := map[table.Area]map[int]string{}
 	keys := map[string]bool{}
 	exports := map[int]bool{}
 	for _, e := range f.Entries {
 		if e.Area > table.InputRegisters || !e.Format.Valid() {
 			return fmt.Errorf("%s: invalid area/format", e.Key)
+		}
+		if err := e.checkStatic(); err != nil {
+			return err
 		}
 		if (e.Format == Bit) != e.Area.IsBit() {
 			return fmt.Errorf("%s: format %s does not fit %s", e.Key, e.Format, e.Area)
@@ -292,6 +315,52 @@ func (f *File) place(e *Entry, prev *Entry) error {
 	return nil
 }
 
+// checkStatic checks what can be checked without the CCU catalog:
+// identity, kind, type/format pairing and scale.
+func (e Entry) checkStatic() error {
+	switch e.Kind {
+	case "dp":
+		if !strings.HasPrefix(e.Key, "dp:") || len(e.Key) <= 3 {
+			return fmt.Errorf("%q: key does not fit kind dp", e.Key)
+		}
+	case "sv":
+		if e.SysVarID <= 0 || e.Key != fmt.Sprintf("sv:%d", e.SysVarID) {
+			return fmt.Errorf("%q: key does not fit system variable %d", e.Key, e.SysVarID)
+		}
+	default:
+		return fmt.Errorf("%q: unknown kind %q", e.Key, e.Kind)
+	}
+	if !e.Type.Offered() {
+		return fmt.Errorf("%s: type %s is not offered", e.Key, e.Type)
+	}
+	bitType := e.Type == rega.Bool || e.Type == rega.Action
+	if bitType != (e.Format == Bit) {
+		return fmt.Errorf("%s: format %s does not fit type %s", e.Key, e.Format, e.Type)
+	}
+	switch e.Format {
+	case Bit:
+	case Float32:
+		if e.Scale != 1 {
+			return fmt.Errorf("%s: scale must be 1 for float32", e.Key)
+		}
+	default:
+		if !(e.Scale > 0) || math.IsInf(e.Scale, 0) || e.Scale > 1e6 {
+			return fmt.Errorf("%s: invalid scale %v", e.Key, e.Scale)
+		}
+	}
+	if e.Type == rega.Action && !e.Writable {
+		return fmt.Errorf("%s: an action is only useful as writable coil", e.Key)
+	}
+	return nil
+}
+
+// Clone returns a deep copy.
+func (f *File) Clone() *File {
+	c := *f
+	c.Entries = append([]Entry(nil), f.Entries...)
+	return &c
+}
+
 // Add exports an object, or changes format/writability/label of an
 // exported one. A change of area or size moves the entry to a new address
 // (the old one stays reserved); otherwise the address is kept. A removed
@@ -302,6 +371,9 @@ func (f *File) Add(e Entry) (*Entry, error) {
 	}
 	if e.Format != Bit && e.Scale == 0 {
 		e.Scale = 1
+	}
+	if err := e.checkStatic(); err != nil {
+		return nil, err
 	}
 	if old, ok := f.Find(e.Key); ok {
 		prev := *old

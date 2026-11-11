@@ -101,6 +101,15 @@ func testMapping(t *testing.T) *mapping.File {
 	return m
 }
 
+func newEngine(t *testing.T, m *mapping.File, pol Poller, sk TableSink) *Engine {
+	t.Helper()
+	e, err := New(m, pol, sk, status, 10*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return e
+}
+
 func read(t *testing.T, tab *table.Table, a table.Area, addr, n int) []uint16 {
 	t.Helper()
 	v, err := tab.Read(a, addr, n)
@@ -117,7 +126,7 @@ func bits(t *testing.T, tab *table.Table, export int) (valid, warn uint16) {
 func TestValuesAndBits(t *testing.T) {
 	pol := &fakePoller{}
 	sk := &sink{}
-	e := New(testMapping(t), pol, sk, status, 10*time.Second)
+	e := newEngine(t, testMapping(t), pol, sk)
 	e.SetCatalog(testCatalog())
 	ids := append([]int(nil), pol.items...)
 	sort.Ints(ids)
@@ -188,7 +197,7 @@ func TestValuesAndBits(t *testing.T) {
 
 func TestOrphanAndTypeChange(t *testing.T) {
 	pol := &fakePoller{}
-	e := New(testMapping(t), pol, nil, status, 10*time.Second)
+	e := newEngine(t, testMapping(t), pol, nil)
 	cat := testCatalog()
 	// temperature datapoint vanished, valve state became a string
 	cat.Devices[0].Channels[1].Points = []rega.Point{
@@ -218,7 +227,7 @@ func TestOrphanAndTypeChange(t *testing.T) {
 
 func TestSysVarFoundByNameAfterRestore(t *testing.T) {
 	pol := &fakePoller{}
-	e := New(testMapping(t), pol, nil, status, 10*time.Second)
+	e := newEngine(t, testMapping(t), pol, nil)
 	cat := testCatalog()
 	cat.SysVars[0].ReGaID = 4711 // restore gave a new ID
 	e.SetCatalog(cat)
@@ -237,13 +246,14 @@ func TestRemoveDropsBitsAndStatus(t *testing.T) {
 	pol := &fakePoller{}
 	sk := &sink{}
 	m := testMapping(t)
-	e := New(m, pol, sk, status, 10*time.Second)
+	e := newEngine(t, m, pol, sk)
 	e.SetCatalog(testCatalog())
 	e.SetStatus(1, 70000)
-	m2 := *m
-	m2.Entries = append([]mapping.Entry(nil), m.Entries...)
+	m2 := e.Mapping()
 	m2.Remove("dp:BidCos-RF.V1:4.VALVE_STATE")
-	e.SetMapping(&m2)
+	if err := e.SetMapping(m2); err != nil {
+		t.Fatal(err)
+	}
 	tab := sk.t
 	if _, err := tab.Read(table.DiscreteInputs, mapping.ValidBase+2, 1); err != nil {
 		t.Fatal(err) // reserved gap inside the block reads 0
@@ -257,5 +267,160 @@ func TestRemoveDropsBitsAndStatus(t *testing.T) {
 	}
 	if err := tab.CheckWrite(table.InputRegisters, 6, 1); err == nil {
 		t.Fatal("gap writable")
+	}
+}
+
+// blockingSink records whether the table it receives is already filled
+// and can block to provoke races.
+type blockingSink struct {
+	mu      sync.Mutex
+	tables  []*table.Table
+	release chan struct{}
+	entered chan struct{}
+	checks  []uint16
+}
+
+func (s *blockingSink) SetTable(t *table.Table) {
+	v, _ := t.Read(table.DiscreteInputs, mapping.ValidBase+1, 1)
+	s.mu.Lock()
+	s.tables = append(s.tables, t)
+	s.checks = append(s.checks, v[0])
+	rel, ent := s.release, s.entered
+	s.release, s.entered = nil, nil
+	s.mu.Unlock()
+	if rel != nil {
+		close(ent)
+		<-rel
+	}
+}
+
+// Regression E1: a rebuilt table is complete before it is handed over.
+func TestNewTableIsFilledBeforeHandOver(t *testing.T) {
+	pol := &fakePoller{}
+	sk := &blockingSink{}
+	e := newEngine(t, testMapping(t), pol, sk)
+	pol.set(map[int]rega.Reading{10: {Found: true, Value: "false", Timestamp: 1}, 11: {Found: true, Value: "21.500000", Timestamp: 9}}, time.Now())
+	e.SetCatalog(testCatalog())
+	sk.mu.Lock()
+	last := sk.checks[len(sk.checks)-1]
+	sk.mu.Unlock()
+	if last != 1 {
+		t.Fatal("table handed over before its values and valid bits were filled")
+	}
+}
+
+// Regression E1/E4: concurrent rebuilds are serialized; the later one
+// wins for both the poller selection and the table.
+func TestConcurrentRebuildsAreSerialized(t *testing.T) {
+	pol := &fakePoller{}
+	sk := &blockingSink{}
+	e := newEngine(t, testMapping(t), pol, sk)
+	e.SetCatalog(testCatalog())
+
+	sk.mu.Lock()
+	sk.release = make(chan struct{})
+	sk.entered = make(chan struct{})
+	rel, ent := sk.release, sk.entered
+	sk.mu.Unlock()
+
+	// first rebuild (catalog without the system variable) blocks in SetTable
+	cat1 := testCatalog()
+	cat1.SysVars = nil
+	done1 := make(chan struct{})
+	go func() { e.SetCatalog(cat1); close(done1) }()
+	<-ent
+	// second rebuild must wait for the first, then win
+	done2 := make(chan struct{})
+	go func() { e.SetCatalog(testCatalog()); close(done2) }()
+	select {
+	case <-done2:
+		t.Fatal("second rebuild overtook the first")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(rel)
+	<-done1
+	<-done2
+	has950 := false
+	pol.mu.Lock()
+	for _, id := range pol.items {
+		if id == 950 {
+			has950 = true
+		}
+	}
+	pol.mu.Unlock()
+	sk.mu.Lock()
+	lastTab := sk.tables[len(sk.tables)-1]
+	sk.mu.Unlock()
+	if !has950 || lastTab != e.Table() {
+		t.Fatalf("older rebuild won: items %v", pol.items)
+	}
+}
+
+// Regression E2: invalid mappings are rejected, the engine keeps its
+// state, and returned mappings are copies.
+func TestSetMappingValidatesAndCopies(t *testing.T) {
+	pol := &fakePoller{}
+	e := newEngine(t, testMapping(t), pol, nil)
+	before := e.Table()
+	bad := e.Mapping()
+	bad.Next[table.HoldingRegisters] = -5
+	if err := e.SetMapping(bad); err == nil {
+		t.Fatal("negative next accepted")
+	}
+	bad = e.Mapping()
+	bad.Next[table.InputRegisters] = 1 << 30
+	if err := e.SetMapping(bad); err == nil {
+		t.Fatal("huge next accepted")
+	}
+	if e.Table() != before {
+		t.Fatal("table replaced by an invalid mapping")
+	}
+	m := e.Mapping()
+	m.Entries[0].Label = "changed outside"
+	if e.Mapping().Entries[0].Label == "changed outside" {
+		t.Fatal("Mapping() exposes internal state")
+	}
+	in := testMapping(t)
+	e2 := newEngine(t, in, pol, nil)
+	in.Entries[0].Label = "changed after New"
+	if e2.Mapping().Entries[0].Label == "changed after New" {
+		t.Fatal("New keeps the caller's pointer")
+	}
+	if _, err := New(bad, pol, nil, status, time.Second); err == nil {
+		t.Fatal("New accepted an invalid mapping")
+	}
+}
+
+// Regression E3: after a format change the old words are not used as
+// substitute.
+func TestFormatChangeDropsSubstitute(t *testing.T) {
+	pol := &fakePoller{}
+	sk := &sink{}
+	e := newEngine(t, testMapping(t), pol, sk)
+	e.SetCatalog(testCatalog())
+	now := time.Now()
+	pol.set(map[int]rega.Reading{10: {Found: true, Value: "false", Timestamp: 1}, 12: {Found: true, Value: "42", Timestamp: 5}}, now)
+	e.Refresh(now)
+	if v := read(t, sk.t, table.InputRegisters, 6, 1); v[0] != 42 {
+		t.Fatalf("valve %v", v)
+	}
+	// the value goes missing, then the valve is re-mapped as int16 x10
+	// (different representation, same address)
+	pol.set(map[int]rega.Reading{10: {Found: true, Value: "false", Timestamp: 1}}, now)
+	e.Refresh(now)
+	if v := read(t, sk.t, table.InputRegisters, 6, 1); v[0] != 42 {
+		t.Fatalf("substitute in the old format expected: %v", v)
+	}
+	m := e.Mapping()
+	if _, err := m.Add(mapping.Entry{Key: "dp:BidCos-RF.V1:4.VALVE_STATE", Kind: "dp", Type: rega.Integer, Format: mapping.Int16, Scale: 10}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.SetMapping(m); err != nil {
+		t.Fatal(err)
+	}
+	// still missing: the old 42 (uint16) must not be used for int16 x10
+	e.Refresh(now)
+	if v := read(t, sk.t, table.InputRegisters, 6, 1); v[0] != 0 {
+		t.Fatalf("old substitute reused after format change: %v", v)
 	}
 }
