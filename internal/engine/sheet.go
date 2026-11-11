@@ -22,6 +22,7 @@ package engine
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/WolfHenk/CCU-ModbusServer/internal/mapping"
@@ -57,6 +58,7 @@ type SheetRow struct {
 	Comm      string                `json:"comm"`   // communication warning text
 	Reception quality.ReceptionInfo `json:"reception"`
 	Orphan    bool                  `json:"orphan"`
+	Reserved  bool                  `json:"reserved"` // deselected: address and bits stay reserved
 }
 
 func classic(a table.Area, addr int) string {
@@ -110,6 +112,9 @@ func (e *Engine) Sheet(now time.Time) []SheetRow {
 		reason := quality.Missing
 		if o.regaID != 0 {
 			reason = quality.Judge(o.regaID, values, h.LastOK, e.MaxAge, now)
+			if e.isStale(o.regaID) {
+				reason = quality.Unknown
+			}
 			row.Value = values[o.regaID].Value
 			row.Reception = e.rec.Info(o.regaID, now)
 		}
@@ -121,6 +126,26 @@ func (e *Engine) Sheet(now time.Time) []SheetRow {
 			row.Value = ""
 		}
 		rows = append(rows, row)
+	}
+	// Deselected entries keep their addresses; the client must know them.
+	for _, en := range e.m.Entries {
+		if !en.Removed {
+			continue
+		}
+		n := max(1, en.Format.Words())
+		r, _ := fcs(en.Area, n)
+		src := en.SysVarName
+		if en.Kind == "dp" {
+			src = strings.TrimPrefix(en.Key, "dp:")
+		}
+		rows = append(rows, SheetRow{
+			Export: en.Export, Label: en.Label, Key: en.Key, Source: src,
+			Table: en.Area.String(), FCRead: r,
+			Address: en.Address, Classic: classic(en.Area, en.Address), Count: n,
+			Format: string(en.Format), Scale: en.Scale, Access: "–",
+			ValidBit: mapping.ValidBase + en.Export, WarnBit: mapping.WarnBase + en.Export,
+			Reason: "reserviert (abgewählt)", Comm: quality.CommNone.String(), Reserved: true,
+		})
 	}
 	sort.Slice(rows, func(i, j int) bool {
 		if rows[i].Table != rows[j].Table {

@@ -537,3 +537,29 @@ func TestRejectedMappingKeepsState(t *testing.T) {
 		t.Fatal("state changed by a rejected mapping")
 	}
 }
+
+// U3: deselected entries stay on the client sheet with their address.
+func TestSheetListsReservedAddresses(t *testing.T) {
+	pol := &fakePoller{}
+	e := newEngine(t, writeMapping(t), pol, nil)
+	e.SetCatalog(writeCatalog())
+	m := e.Mapping()
+	if !m.Remove("dp:HmIP-RF.T1:1.SET_POINT_MODE") {
+		t.Fatal("remove")
+	}
+	if err := e.SetMapping(m); err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, r := range e.Sheet(time.Now()) {
+		if r.Key == "dp:HmIP-RF.T1:1.SET_POINT_MODE" {
+			found = true
+			if !r.Reserved || r.Address != 2 || r.Table != table.HoldingRegisters.String() || r.Valid || r.FCWrite != "" || r.ValidBit != mapping.ValidBase+2 {
+				t.Fatalf("reserved row %+v", r)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("deselected entry missing from the sheet")
+	}
+}

@@ -350,10 +350,15 @@ func TestMappingAPI(t *testing.T) {
 		WordOrder string            `json:"word_order"`
 		Rows      []engine.SheetRow `json:"rows"`
 	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &sheet); err != nil || len(sheet.Rows) != 2 || sheet.WordOrder != "CDAB" {
+	if err := json.Unmarshal(rec.Body.Bytes(), &sheet); err != nil || len(sheet.Rows) != 3 || sheet.WordOrder != "CDAB" {
 		t.Fatalf("sheet: %s %v", rec.Body, err)
 	}
-	r := sheet.Rows[0] // input register 4 sorts after holding? no: input before holding
+	// the removed system variable keeps coil 0 and is listed as reserved
+	if r := sheet.Rows[0]; !r.Reserved || r.Table != "Coil" || r.Address != 0 || r.FCWrite != "" {
+		t.Fatalf("reserved row: %+v", r)
+	}
+	sheet.Rows = sheet.Rows[1:]
+	r := sheet.Rows[0] // input registers sort before holding registers
 	if r.Table != "Input Register" || r.Address != 4 || r.Classic != "300005" || r.FCRead != "04" || r.Access != "R" || r.Unit != "°C" || r.ValidBit != 10001 {
 		t.Fatalf("row 0: %+v", r)
 	}

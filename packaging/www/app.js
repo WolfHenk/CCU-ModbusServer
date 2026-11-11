@@ -153,7 +153,11 @@ async function toggle(key, on, box) {
   busy = true;
   box.disabled = true;
   try {
-    await api('mapping', on ? {action: 'add', key} : {action: 'remove', key});
+    const info = keyIndex.get(key);
+    // a key press only makes sense written: ACTION is released writable
+    const add = {action: 'add', key};
+    if (info && info.p.type === 'ACTION') add.writable = true;
+    await api('mapping', on ? add : {action: 'remove', key});
     await reloadMapping();
     notice(on ? 'Freigegeben.' : 'Freigabe entfernt. Die Adresse bleibt reserviert.');
   } catch (e) {
@@ -166,7 +170,8 @@ async function toggle(key, on, box) {
 }
 
 function selectable(p) {
-  return OFFERED.has(p.type) && (p.readable !== false || p.type === 'ACTION');
+  if (p.type === 'ACTION') return !!p.writable;
+  return OFFERED.has(p.type) && p.readable !== false;
 }
 
 function pointRow(key, p, name, unit) {
@@ -271,6 +276,7 @@ function renderSysvars() {
 // ---------------------------------------------------------------- exports
 
 function stateCell(r) {
+  if (r.reserved) return el('span', {class: 'meta'}, 'abgewählt – Adresse bleibt reserviert');
   if (r.orphan) return el('span', {class: 'bad'}, 'nicht mehr in der CCU');
   const t = [el('span', {class: r.valid ? 'ok' : 'bad'}, r.reason)];
   if (r.comm && r.comm !== 'keine Angabe' && r.comm !== 'ok') t.push(el('div', {class: 'warn'}, r.comm));
@@ -281,18 +287,27 @@ function stateCell(r) {
 function renderExports() {
   const rows = sheet.slice().sort((a, b) => a.export - b.export).map(r => {
     const info = keyIndex.get(r.key);
-    return el('tr', {class: r.orphan ? 'orphan' : ''},
+    return el('tr', {class: r.orphan || r.reserved ? 'orphan' : ''},
       el('td', {}, r.export),
       el('td', {}, r.label),
       el('td', {class: 'meta'}, r.source),
       el('td', {}, r.table),
       el('td', {}, r.address + (r.count > 1 ? '–' + (r.address + r.count - 1) : '')),
       el('td', {}, (FORMAT_TEXT[r.format] || r.format) + (r.scale && r.scale !== 1 && r.format !== 'bit' ? ' ×' + deNum(r.scale) : '')),
-      el('td', {}, showValue(r.value, info ? info.p.type : '', info ? info.p.value_list : null, r.unit)),
+      el('td', {}, r.reserved ? '–' : showValue(r.value, info ? info.p.type : '', info ? info.p.value_list : null, r.unit)),
       el('td', {}, stateCell(r)),
-      el('td', {}, el('button', {type: 'button', onclick: () => openEdit(r.key)}, 'Bearbeiten')));
+      el('td', {}, r.reserved
+        ? (info ? el('button', {type: 'button', onclick: ev => reAdd(r.key, ev.target)}, 'Wieder freigeben') : '')
+        : el('button', {type: 'button', onclick: () => openEdit(r.key)}, 'Bearbeiten')));
   });
   $('exportRows').replaceChildren(...(rows.length ? rows : [el('tr', {}, el('td', {colspan: 9, class: 'empty'}, 'Noch keine Werte freigegeben. Unter „Geräte" oder „Systemvariablen" anhaken.'))]));
+}
+
+async function reAdd(key, btn) {
+  const fake = {checked: true, disabled: false};
+  btn.disabled = true;
+  await toggle(key, true, fake);
+  btn.disabled = false;
 }
 
 let editKey = null;
@@ -345,10 +360,12 @@ async function applyEdit(remove) {
 
 // ---------------------------------------------------------------- client sheet
 
+// third field: true = free text from the CCU or the user (CSV-neutralized)
 const SHEET_COLS = [
   ['Nr.', r => r.export],
-  ['Bezeichnung', r => r.label],
-  ['Quelle (CCU)', r => r.source],
+  ['Bezeichnung', r => r.label, true],
+  ['Quelle (CCU)', r => r.source, true],
+  ['Status', r => r.reserved ? 'reserviert (abgewählt)' : r.orphan ? 'fehlt in der CCU – Adresse reserviert' : 'aktiv', true],
   ['Tabelle', r => r.table],
   ['FC lesen', r => r.fc_read],
   ['FC schreiben', r => r.fc_write || '–'],
@@ -357,10 +374,10 @@ const SHEET_COLS = [
   ['Anzahl', r => r.count],
   ['Format', r => r.format.toUpperCase()],
   ['Faktor', r => r.format === 'bit' ? '' : deNum(r.scale || 1)],
-  ['Einheit', r => r.unit || ''],
+  ['Einheit', r => r.unit || '', true],
   ['MIN', r => r.min !== undefined && r.min !== null ? deNum(r.min) : ''],
   ['MAX', r => r.max !== undefined && r.max !== null ? deNum(r.max) : ''],
-  ['Werteliste', r => (r.value_list || []).map((v, i) => i + '=' + v).join(', ')],
+  ['Werteliste', r => (r.value_list || []).map((v, i) => i + '=' + v).join(', '), true],
   ['Zugriff', r => r.access],
   ['Gültig-Bit (DI)', r => r.valid_bit],
   ['Warn-Bit (DI)', r => r.warn_bit],
@@ -383,8 +400,10 @@ function sheetHeader() {
   ];
 }
 
+// all rows, including deselected and vanished ones: their addresses stay
+// reserved and must be visible to whoever configures the client
 function sheetRows() {
-  return sheet.filter(r => !r.orphan).sort((a, b) => a.export - b.export);
+  return sheet.slice().sort((a, b) => a.export - b.export);
 }
 
 function renderSheet() {
@@ -392,23 +411,26 @@ function renderSheet() {
   const rows = sheetRows();
   const tbl = el('table', {class: 'sheettable'},
     el('thead', {}, el('tr', {}, SHEET_COLS.map(c => el('th', {}, c[0])))),
-    el('tbody', {}, rows.map(r => el('tr', {}, SHEET_COLS.map(c => el('td', {}, c[1](r)))))));
+    el('tbody', {}, rows.map(r => el('tr', {class: r.orphan || r.reserved ? 'orphan' : ''}, SHEET_COLS.map(c => el('td', {}, c[1](r)))))));
   $('sheet').replaceChildren(
     el('h2', {class: 'printonly'}, 'CCU-ModbusServer – Client-Einstellungen'),
     head,
     rows.length ? tbl : el('div', {class: 'empty'}, 'Noch keine Werte freigegeben.'));
 }
 
-function csvField(v) {
-  const s = String(v ?? '');
+// Text that a spreadsheet would read as a formula (=, +, -, @, tab, CR)
+// gets a leading apostrophe; numbers of our own columns stay numbers.
+function csvField(v, text) {
+  let s = String(v ?? '');
+  if (text && /^[=+\-@\t\r]/.test(s)) s = "'" + s;
   return /[;"\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
 }
 
 function downloadCSV() {
-  const lines = sheetHeader().map(([k, v]) => csvField(k) + ';' + csvField(v));
+  const lines = sheetHeader().map(([k, v]) => csvField(k, true) + ';' + csvField(v, true));
   lines.push('');
-  lines.push(SHEET_COLS.map(c => csvField(c[0])).join(';'));
-  for (const r of sheetRows()) lines.push(SHEET_COLS.map(c => csvField(c[1](r))).join(';'));
+  lines.push(SHEET_COLS.map(c => csvField(c[0], true)).join(';'));
+  for (const r of sheetRows()) lines.push(SHEET_COLS.map(c => csvField(c[1](r), c[2])).join(';'));
   const blob = new Blob(['﻿' + lines.join('\r\n') + '\r\n'], {type: 'text/csv;charset=utf-8'});
   const a = el('a', {href: URL.createObjectURL(blob), download: 'CCU-ModbusServer-' + location.hostname + '-' + new Date().toISOString().slice(0, 10) + '.csv'});
   document.body.append(a);

@@ -29,6 +29,8 @@ test:
 	$(GO) vet ./...
 	CGO_ENABLED=1 $(GO) test -race -count=1 ./...
 	sh -n packaging/update_script packaging/rc.d/ccu-modbusserver
+	node --check packaging/www/app.js
+	node tools/test_csv.js
 
 build:
 	mkdir -p build/bin/linux-amd64 build/bin/linux-arm64 build/bin/linux-arm
