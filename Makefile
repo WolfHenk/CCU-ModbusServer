@@ -28,9 +28,10 @@ test:
 	gofmt -l . | (! grep .)
 	$(GO) vet ./...
 	CGO_ENABLED=1 $(GO) test -race -count=1 ./...
-	sh -n packaging/update_script packaging/rc.d/ccu-modbusserver
+	sh -n packaging/update_script packaging/rc.d/ccu-modbusserver packaging/bin/set-port
 	node --check packaging/www/app.js
 	node tools/test_csv.js
+	sh tools/test_set_port.sh
 
 build:
 	mkdir -p build/bin/linux-amd64 build/bin/linux-arm64 build/bin/linux-arm
@@ -49,7 +50,7 @@ package: test build source
 	rm -rf build/pkg
 	mkdir -p build/pkg/bin build/pkg/rc.d build/pkg/www/img build/pkg/lib build/pkg/examples
 	cp -a build/bin/linux-* build/pkg/bin/
-	cp packaging/bin/update_addon packaging/bin/firewall build/pkg/bin/
+	cp packaging/bin/update_addon packaging/bin/firewall packaging/bin/set-port build/pkg/bin/
 	cp packaging/update_script build/pkg/
 	cp packaging/rc.d/ccu-modbusserver build/pkg/rc.d/
 	cp packaging/www/*.cgi packaging/www/style.css packaging/www/app.js build/pkg/www/
@@ -58,6 +59,6 @@ package: test build source
 	cp packaging/examples/config.json build/pkg/examples/
 	cp VERSION LICENSE build/pkg/
 	cp -a build/source build/pkg/source
-	chmod 755 build/pkg/update_script build/pkg/bin/update_addon build/pkg/bin/firewall build/pkg/www/*.cgi build/pkg/rc.d/ccu-modbusserver
+	chmod 755 build/pkg/update_script build/pkg/bin/update_addon build/pkg/bin/firewall build/pkg/bin/set-port build/pkg/www/*.cgi build/pkg/rc.d/ccu-modbusserver
 	cd build/pkg && tar --owner=0 --group=0 -czf ../CCU-ModbusServer-$(VERSION)-INSTALL.tar.gz .
 	cd build && sha256sum CCU-ModbusServer-$(VERSION)-INSTALL.tar.gz > CCU-ModbusServer-$(VERSION)-INSTALL.tar.gz.sha256

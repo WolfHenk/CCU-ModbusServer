@@ -22,6 +22,8 @@
 # (127.0.0.1 only). The browser never talks to the daemon directly.
 #   GET  ?sid=..&path=status|catalog|mapping|sheet|writelog|config
 #   POST ?sid=..&path=mapping|writeallow   (body: one JSON object)
+#   POST ?sid=..&path=port   {"port":N}  handled here: bin/set-port, which
+#        restarts the server (the daemon cannot restart itself)
 # Protection: administrator session (like the OpenCCU add-on page), fixed
 # path list, POST only with Content-Type application/json and an Origin
 # (if the browser sends one) equal to this host. The Origin header is not
@@ -50,7 +52,7 @@ if {![check_session [query_value sid]]} {
 set method [env REQUEST_METHOD]
 set path [query_value path]
 set get {status catalog mapping sheet writelog config}
-set post {mapping writeallow}
+set post {mapping writeallow port}
 if {$method eq "GET" && [lsearch -exact $get $path] >= 0} {
     set body ""
 } elseif {$method eq "POST" && [lsearch -exact $post $path] >= 0} {
@@ -73,6 +75,19 @@ if {$method eq "GET" && [lsearch -exact $get $path] >= 0} {
     }
 } else {
     reply 405 {Method Not Allowed} {{"error":"Pfad oder Methode nicht erlaubt"}}
+}
+
+if {$path eq "port"} {
+    if {![regexp {^\s*\{\s*"port"\s*:\s*([0-9]{1,5})\s*\}\s*$} $body all newport]} {
+        reply 400 {Bad Request} {{"error":"erwartet {\"port\":Zahl}"}}
+    }
+    if {[catch {set res [exec /usr/local/addons/ccu-modbusserver/bin/set-port $newport]} err]} {
+        # non-zero exit: the script's JSON line is the error text
+        set res [lindex [split [string trim $err] "\n"] 0]
+        if {![string match "\{*" $res]} { set res {{"ok":false,"port":0,"error":"Portänderung fehlgeschlagen"}} }
+        reply 422 {Unprocessable Entity} $res
+    }
+    reply 200 OK $res
 }
 
 # API address from config.json; only the loopback interface is accepted

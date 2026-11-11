@@ -70,7 +70,7 @@ tr.orphan td{color:#999}
 .toolbar{display:flex;align-items:center;gap:8px;margin-bottom:12px}.spacer{flex:1}
 textarea{width:100%;font-family:monospace;font-size:13px;padding:7px;border:1px solid #aeb4ba;border-radius:3px}
 .actions{display:flex;gap:12px;align-items:center;margin-top:8px}
-.card select{font:inherit;padding:6px}
+.card select,.card input[type=number]{font:inherit;padding:6px}.card input[type=number]{width:110px;border:1px solid #aeb4ba;border-radius:3px}
 .sheethead{width:auto;margin-bottom:14px}.sheethead th{width:170px;background:#f7f8f9}
 .sheettable td,.sheettable th{white-space:nowrap}
 .printonly{display:none}

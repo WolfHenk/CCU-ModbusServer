@@ -24,7 +24,7 @@ BASE=/usr/local/addons/$ADDON
 CFGDIR=/usr/local/etc/config/addons/$ADDON
 WEBDIR=/usr/local/etc/config/addons/www
 RCDIR=/usr/local/etc/config/rc.d
-[ -f VERSION ] && [ -f LICENSE ] && [ -f source/LICENSE ] && [ -f examples/config.json ] && [ -f rc.d/$ADDON ] && [ -x bin/update_addon ] && [ -x bin/firewall ] || exit 13
+[ -f VERSION ] && [ -f LICENSE ] && [ -f source/LICENSE ] && [ -f examples/config.json ] && [ -f rc.d/$ADDON ] && [ -x bin/update_addon ] && [ -x bin/firewall ] && [ -x bin/set-port ] || exit 13
 case "$(uname -m)" in
   aarch64|arm64) PLATFORM=arm64 ;;
   armv7l) PLATFORM=arm ;;
@@ -45,7 +45,7 @@ else
 fi
 mkdir -p "$BASE/bin" "$BASE/www/img" "$BASE/lib" "$BASE/source" "$CFGDIR" "$WEBDIR" "$RCDIR"
 cp "$SRC" "$BASE/bin/ccu-modbusserverd"
-cp -f bin/update_addon bin/firewall "$BASE/bin/"
+cp -f bin/update_addon bin/firewall bin/set-port "$BASE/bin/"
 cp -f www/*.cgi www/*.css www/*.js "$BASE/www/"
 cp -f www/img/modbus-logo*.png "$BASE/www/img/"
 cp -f lib/session.tcl "$BASE/lib/"

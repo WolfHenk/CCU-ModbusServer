@@ -455,6 +455,28 @@ async function saveAllow() {
   }
 }
 
+async function savePort() {
+  const out = $('portResult'), btn = $('savePort');
+  const port = parseInt($('portInput').value, 10);
+  out.className = '';
+  if (!(port >= 1 && port <= 65535)) { out.textContent = 'Port muss zwischen 1 und 65535 liegen.'; out.className = 'bad'; return; }
+  if (String(port) === PORT) { out.textContent = 'Port ist bereits aktiv.'; return; }
+  btn.disabled = true;
+  busy = true;
+  out.textContent = 'Server startet mit Port ' + port + ' neu …';
+  try {
+    await api('port', {port});
+    out.textContent = 'Port ' + port + ' aktiv. Seite wird neu geladen.';
+    out.className = 'ok';
+    setTimeout(() => location.reload(), 1500);
+  } catch (e) {
+    out.textContent = e.message;
+    out.className = 'bad';
+    btn.disabled = false;
+    busy = false;
+  }
+}
+
 async function saveWordOrder() {
   try {
     await api('mapping', {action: 'word_order', word_order: $('wordOrder').value});
@@ -521,6 +543,7 @@ $('eFormat').addEventListener('change', scaleState);
 $('eApply').addEventListener('click', () => applyEdit(false));
 $('eRemove').addEventListener('click', () => applyEdit(true));
 $('saveAllow').addEventListener('click', saveAllow);
+$('savePort').addEventListener('click', savePort);
 $('wordOrder').addEventListener('change', saveWordOrder);
 $('csvBtn').addEventListener('click', downloadCSV);
 $('printBtn').addEventListener('click', () => { renderSheet(); window.print(); });

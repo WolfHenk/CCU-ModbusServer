@@ -1,0 +1,87 @@
+#!/bin/sh
+# -----------------------------------------------------------------------------
+# Projekt:      CCU-ModbusServer
+# Datei:        packaging/bin/set-port
+# Ersteller:    Wolfram Henkel
+# Datum:        11. Nov. 2026
+# Version:      0.5.0
+#
+# Copyright (c) 2026 Wolfram Henkel.
+#
+# Lizenz:       CCU-ModbusServer-Lizenz für kostenfreie Nutzung und
+#               Weitergabe, Version 1.1.
+#
+# Private und gewerbliche Nutzung sind erlaubt.
+# Die Software und Änderungen dürfen nur kostenlos unter
+# derselben Lizenz und mit vollständigem Quellcode weitergegeben werden.
+#
+# Vollständiger Lizenztext: LICENSE
+# -----------------------------------------------------------------------------
+#
+# set-port PORT: change the Modbus TCP port.
+#  1. the daemon itself checks a candidate configuration (valid, port free)
+#  2. config.json is replaced atomically
+#  3. rc.d restart (firewall follows: new port opened, own old port closed)
+#  4. if the server does not come up, the previous configuration is put
+#     back and started again
+# Output: one JSON line. Exit 0 = new port active.
+
+ADDON=ccu-modbusserver
+BASE=${CCU_MS_BASE:-/usr/local/addons/$ADDON}
+CFGDIR=${CCU_MS_CFGDIR:-/usr/local/etc/config/addons/$ADDON}
+RCD=${CCU_MS_RCD:-/usr/local/etc/config/rc.d/$ADDON}
+CONF=$CFGDIR/config.json
+LOG=${CCU_MS_LOG:-/var/log/$ADDON.log}
+LOCK=/tmp/$ADDON-setport.lock
+BIN=$BASE/bin/ccu-modbusserverd
+
+out() { echo "{\"ok\":$1,\"port\":$2,\"error\":\"$3\"}"; }
+log() { echo "$(date '+%Y/%m/%d %H:%M:%S') set-port: $*" >>"$LOG"; }
+
+NEW=$1
+case "$NEW" in
+  ''|*[!0-9]*) out false 0 "Port muss eine Zahl sein"; exit 1 ;;
+esac
+NEW=$(expr "$NEW" + 0)
+if [ "$NEW" -lt 1 ] || [ "$NEW" -gt 65535 ]; then
+  out false "$NEW" "Port muss zwischen 1 und 65535 liegen"; exit 1
+fi
+
+mkdir "$LOCK" 2>/dev/null || { out false "$NEW" "Eine Portänderung läuft bereits"; exit 1; }
+trap 'rm -rf "$LOCK" "$CONF.new" "$CONF.check"' EXIT
+
+OLD=$("$BIN" -config "$CONF" -print-port 2>/dev/null) || { out false "$NEW" "Konfiguration ungültig"; exit 1; }
+if [ "$NEW" = "$OLD" ]; then
+  out true "$NEW" ""; exit 0
+fi
+
+# candidate: only the "port" value changes
+sed -E "s/(\"port\"[[:space:]]*:[[:space:]]*)[0-9]+/\\1$NEW/" "$CONF" > "$CONF.check" || { out false "$NEW" "Konfiguration nicht schreibbar"; exit 1; }
+GOT=$("$BIN" -config "$CONF.check" -print-port 2>/dev/null)
+if [ "$GOT" != "$NEW" ]; then
+  out false "$NEW" "Konfiguration ungültig"; exit 1
+fi
+if ! "$BIN" -config "$CONF.check" -check >/dev/null 2>&1; then
+  out false "$NEW" "Port $NEW ist belegt oder nicht nutzbar"; exit 1
+fi
+
+cp -p "$CONF" "$CONF.prev" || { out false "$NEW" "Sicherung fehlgeschlagen"; exit 1; }
+cp "$CONF.check" "$CONF.new" && chmod 600 "$CONF.new" && sync && mv -f "$CONF.new" "$CONF" || { out false "$NEW" "Konfiguration nicht schreibbar"; exit 1; }
+log "Port $OLD -> $NEW"
+
+if "$RCD" restart >/dev/null 2>&1; then
+  rm -f "$CONF.prev"
+  log "Port $NEW aktiv"
+  out true "$NEW" ""
+  exit 0
+fi
+
+# back to the previous port
+log "Start mit Port $NEW fehlgeschlagen, zurück auf Port $OLD"
+mv -f "$CONF.prev" "$CONF"
+if "$RCD" start >/dev/null 2>&1; then
+  out false "$OLD" "Server startete mit Port $NEW nicht; Port $OLD bleibt aktiv"
+else
+  out false "$OLD" "Server startete weder mit Port $NEW noch mit Port $OLD – siehe Protokoll"
+fi
+exit 1

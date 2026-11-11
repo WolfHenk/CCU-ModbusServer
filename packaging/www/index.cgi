@@ -115,7 +115,8 @@ puts {<section id="tab-settings" class="tab hidden">}
 puts {<div class="card"><h3>Schreiben über Modbus</h3><p class="hint">Nur diese Geräte dürfen Werte schreiben (eine IP-Adresse oder ein Netz wie 192.168.1.0/24 je Zeile). Leer = niemand darf schreiben. Zusätzlich muss der einzelne Wert unter „Freigaben" als schreibbar markiert sein.</p>}
 puts {<textarea id="allowList" rows="5" spellcheck="false"></textarea><div class="actions"><button id="saveAllow" class="primary">Speichern</button><span id="allowResult" role="status"></span></div></div>}
 puts {<div class="card"><h3>Wortreihenfolge für 32-Bit-Werte</h3><p class="hint">ABCD (High-Word zuerst) ist Standard. CDAB nur, wenn der Client es verlangt.</p><select id="wordOrder"><option value="ABCD">ABCD (High-Word zuerst)</option><option value="CDAB">CDAB (Low-Word zuerst)</option></select></div>}
-puts "<div class=\"card\"><h3>Port</h3><p class=\"hint\">Der Server hört auf Port <strong>[html $port]</strong> (Modbus-Standard 502). Unit-ID beliebig. Ein anderer Port wird in config.json eingetragen; beim Neustart des Add-ons wird die Firewall automatisch angepasst.</p></div>"
+puts "<div class=\"card\"><h3>Port</h3><p class=\"hint\">Modbus-Standard ist 502. Beim Ändern startet der Server neu und trägt den neuen Port automatisch in die Firewall ein; bestehende Modbus-Verbindungen werden getrennt. Die Clients müssen danach den neuen Port verwenden.</p>"
+puts "<div class=\"actions\"><input id=\"portInput\" type=\"number\" min=\"1\" max=\"65535\" value=\"[html $port]\"><button id=\"savePort\" class=\"primary\">Port ändern</button><span id=\"portResult\" role=\"status\"></span></div></div>"
 puts {<div class="card"><h3>Letzte Schreibvorgänge</h3><div class="tablewrap"><table><thead><tr><th>Zeit</th><th>Client</th><th>Wert</th><th>Bezeichnung</th><th>Ergebnis</th></tr></thead><tbody id="writeLog"></tbody></table></div></div>}
 puts {</section>}
 
