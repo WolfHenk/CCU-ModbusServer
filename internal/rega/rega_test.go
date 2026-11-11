@@ -23,6 +23,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -175,10 +176,7 @@ func TestLiteral(t *testing.T) {
 	}
 }
 
-func nanValue() float64 {
-	var z float64
-	return z / z
-}
+func nanValue() float64 { return math.NaN() }
 
 func fakeReGa(t *testing.T, reply func(script string) string) *Client {
 	t.Helper()
@@ -196,12 +194,12 @@ func TestReadValues(t *testing.T) {
 		got = s
 		return "1117|true|1794358831\r\n1034|%2D1%2E000000|1794358800\r\n99|-|0\r\n#END#"
 	})
-	r, err := c.ReadValues(context.Background(), []int{1117, 1034, 99})
+	r, err := c.ReadValues(context.Background(), []int{1117, 1034, 99, 1117})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(got, "\"1117\t1034\t99\"") {
-		t.Errorf("script ids: %q", got)
+		t.Errorf("script ids (deduplicated): %q", got)
 	}
 	if v := r[1117]; !v.Found || v.Value != "true" || v.Timestamp != 1794358831 {
 		t.Errorf("1117: %+v", v)
@@ -214,24 +212,68 @@ func TestReadValues(t *testing.T) {
 	}
 }
 
+func TestReadValuesRejectsIncompleteOrForeign(t *testing.T) {
+	bad := map[string]string{
+		"missing id":      "1|a|5\r\n#END#",
+		"duplicate id":    "1|a|5\r\n1|a|5\r\n2|b|5\r\n#END#",
+		"foreign id":      "1|a|5\r\n2|b|5\r\n3|c|5\r\n#END#",
+		"bad timestamp":   "1|a|x\r\n2|b|5\r\n#END#",
+		"negative ts":     "1|a|-5\r\n2|b|5\r\n#END#",
+		"missing with ts": "1|-|7\r\n2|b|5\r\n#END#",
+		"no marker":       "1|a|5\r\n2|b|5",
+		"extra field":     "1|a|5|x\r\n2|b|5\r\n#END#",
+	}
+	for name, reply := range bad {
+		c := fakeReGa(t, func(string) string { return reply })
+		if _, err := c.ReadValues(context.Background(), []int{1, 2}); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	c := fakeReGa(t, func(string) string { return "#END#" })
+	if _, err := c.ReadValues(context.Background(), []int{0}); err == nil {
+		t.Error("id 0 accepted")
+	}
+}
+
+func TestResponseLimit(t *testing.T) {
+	c := fakeReGa(t, func(string) string { return strings.Repeat("x", 200) + "\r\n#END#" })
+	c.MaxResponse = 100
+	if _, err := c.Run(context.Background(), "x"); !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("got %v", err)
+	}
+}
+
 func TestSetValue(t *testing.T) {
 	var got string
 	c := fakeReGa(t, func(s string) string { got = s; return "OK\r\n#END#" })
-	if err := c.SetValue(context.Background(), 1129, "true"); err != nil {
+	if err := c.SetValue(context.Background(), 1129, Bool, 1); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(got, "dom.GetObject(1129)") || !strings.Contains(got, "o.State(true)") {
 		t.Errorf("script: %q", got)
 	}
-	if err := c.SetValue(context.Background(), 1, "1); system.Exec(\"x\""); err == nil {
-		t.Error("injection accepted")
+	if err := c.SetValue(context.Background(), 7, Float, 21.5); err != nil || !strings.Contains(got, "o.State(21.5)") {
+		t.Errorf("float: %v %q", err, got)
 	}
-	c2 := fakeReGa(t, func(string) string { return "MISSING\r\n#END#" })
-	if err := c2.SetValue(context.Background(), 5, "1"); !errors.Is(err, ErrRejected) {
-		t.Errorf("missing: %v", err)
+	for _, v := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} {
+		if err := c.SetValue(context.Background(), 7, Float, v); err == nil {
+			t.Errorf("%v accepted", v)
+		}
+	}
+	if err := c.SetValue(context.Background(), 0, Bool, 1); err == nil {
+		t.Error("id 0 accepted")
+	}
+	if err := c.SetValue(context.Background(), 7, String, 1); err == nil {
+		t.Error("string accepted")
+	}
+	for _, reply := range []string{"REJECTED\r\n#END#", "MISSING\r\n#END#", "OK\r\nOK\r\n#END#"} {
+		c2 := fakeReGa(t, func(string) string { return reply })
+		if err := c2.SetValue(context.Background(), 5, Integer, 1); !errors.Is(err, ErrRejected) {
+			t.Errorf("%q: %v", reply, err)
+		}
 	}
 	c3 := fakeReGa(t, func(string) string { return "" })
-	if err := c3.SetValue(context.Background(), 5, "1"); !errors.Is(err, ErrAborted) {
+	if err := c3.SetValue(context.Background(), 5, Integer, 1); !errors.Is(err, ErrAborted) {
 		t.Errorf("aborted: %v", err)
 	}
 }

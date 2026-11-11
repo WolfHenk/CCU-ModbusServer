@@ -37,20 +37,29 @@ type Reading struct {
 
 // ReadValues reads the current ReGa values of the given object IDs in
 // one script. IDs that no longer exist are returned with Found=false.
-// Reading from ReGa never causes radio traffic.
+// The answer must contain exactly one line per requested ID and nothing
+// else; otherwise the whole read is an error and must not update any
+// cache. Reading from ReGa never causes radio traffic.
 func (c *Client) ReadValues(ctx context.Context, ids []int) (map[int]Reading, error) {
-	out := make(map[int]Reading, len(ids))
-	if len(ids) == 0 {
+	want := make(map[int]bool, len(ids))
+	parts := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if id <= 0 {
+			return nil, fmt.Errorf("rega values: invalid id %d", id)
+		}
+		if !want[id] {
+			want[id] = true
+			parts = append(parts, strconv.Itoa(id))
+		}
+	}
+	out := make(map[int]Reading, len(want))
+	if len(want) == 0 {
 		return out, nil
 	}
-	parts := make([]string, len(ids))
-	for i, id := range ids {
-		parts[i] = strconv.Itoa(id)
-	}
-	// ReGa iterates a tab separated string list.
 	// Variables are declared once outside the loop: ReGa does not allow
 	// declarations inside loop bodies, and an assignment keeps the type of
-	// the assigned value, hence ToString().
+	// the assigned value, hence ToString(). ReGa iterates a tab separated
+	// string list.
 	script := `string s; string v; object o; foreach(s, "` + strings.Join(parts, "\t") + `") { o = dom.GetObject(s); if (o) { v = o.Value().ToString(); WriteLine(s # "|" # v.UriEncode() # "|" # o.Timestamp().ToInteger()); } else { WriteLine(s # "|-|0"); } }`
 	lines, err := c.Run(ctx, script)
 	if err != nil {
@@ -64,16 +73,28 @@ func (c *Client) ReadValues(ctx context.Context, ids []int) (map[int]Reading, er
 		if len(f) != 3 {
 			return nil, fmt.Errorf("rega values: malformed %q", line)
 		}
-		id, err := atoi(f[0])
-		if err != nil {
-			return nil, fmt.Errorf("rega values: malformed %q", line)
+		id, err := strconv.Atoi(f[0])
+		if err != nil || !want[id] {
+			return nil, fmt.Errorf("rega values: unexpected id in %q", line)
+		}
+		if _, dup := out[id]; dup {
+			return nil, fmt.Errorf("rega values: duplicate id %d", id)
+		}
+		ts, err := strconv.ParseInt(f[2], 10, 64)
+		if err != nil || ts < 0 {
+			return nil, fmt.Errorf("rega values: bad timestamp in %q", line)
 		}
 		if f[1] == "-" {
+			if ts != 0 {
+				return nil, fmt.Errorf("rega values: malformed %q", line)
+			}
 			out[id] = Reading{}
 			continue
 		}
-		ts, _ := strconv.ParseInt(strings.TrimSpace(f[2]), 10, 64)
 		out[id] = Reading{Found: true, Value: decode(f[1]), Timestamp: ts}
+	}
+	if len(out) != len(want) {
+		return nil, fmt.Errorf("rega values: %d of %d ids answered", len(out), len(want))
 	}
 	return out, nil
 }
@@ -105,14 +126,26 @@ func Literal(t Type, v float64) (string, error) {
 	return "", fmt.Errorf("type %s cannot be written", t)
 }
 
-// SetValue sets one object through ReGa, like the WebUI does (programs
-// triggered by the value run as usual). The literal must come from
-// Literal.
-func (c *Client) SetValue(ctx context.Context, id int, literal string) error {
-	if _, err := strconv.ParseFloat(literal, 64); err != nil && literal != "true" && literal != "false" {
-		return fmt.Errorf("rega: invalid literal %q", literal)
+// SetValue sets one object of type t through ReGa, like the WebUI does
+// (programs triggered by the value run as usual). The value is turned
+// into a script literal by Literal, so only finite plain numbers and
+// true/false reach ReGa.
+//
+// Success means: the object exists and ReGa's State() returned true.
+// Verified on OpenCCU 3.89.11: State() returns false for a read-only
+// datapoint, but ReGa does NOT check MIN/MAX (a system variable with
+// max 100 accepted 5000). Range checks are the caller's job, and success
+// does not mean the device has executed the command; the value read back
+// later is the authority.
+func (c *Client) SetValue(ctx context.Context, id int, t Type, v float64) error {
+	if id <= 0 {
+		return fmt.Errorf("rega: invalid id %d", id)
 	}
-	script := fmt.Sprintf(`object o = dom.GetObject(%d); if (o) { o.State(%s); WriteLine("OK"); } else { WriteLine("MISSING"); }`, id, literal)
+	lit, err := Literal(t, v)
+	if err != nil {
+		return err
+	}
+	script := fmt.Sprintf(`object o = dom.GetObject(%d); if (o) { if (o.State(%s)) { WriteLine("OK"); } else { WriteLine("REJECTED"); } } else { WriteLine("MISSING"); }`, id, lit)
 	lines, err := c.Run(ctx, script)
 	if err != nil {
 		return err

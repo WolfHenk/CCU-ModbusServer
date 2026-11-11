@@ -47,6 +47,9 @@ const endMarker = "#END#"
 type Client struct {
 	URL  string
 	HTTP *http.Client
+	// MaxResponse limits the size of a script response; larger responses
+	// are an error. 0 means 32 MiB.
+	MaxResponse int64
 }
 
 // NewClient returns a client with a 10 s timeout.
@@ -56,6 +59,9 @@ func NewClient(u string) *Client {
 	}
 	return &Client{URL: u, HTTP: &http.Client{Timeout: 10 * time.Second}}
 }
+
+// ErrTooLarge is returned when a response exceeds MaxResponse.
+var ErrTooLarge = errors.New("rega: response too large")
 
 // ErrAborted is returned when a script did not reach its end marker.
 var ErrAborted = errors.New("rega: script aborted (no end marker)")
@@ -77,15 +83,25 @@ func (c *Client) Run(ctx context.Context, script string) ([]string, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("rega: HTTP %d", resp.StatusCode)
 	}
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
+	limit := c.MaxResponse
+	if limit <= 0 {
+		limit = 32 << 20
+	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err != nil {
 		return nil, err
+	}
+	if int64(len(raw)) > limit {
+		return nil, ErrTooLarge
 	}
 	return splitOutput(raw)
 }
 
 // splitOutput removes the trailing <xml> variable dump that rega.exe
-// appends and checks for the end marker.
+// appends and checks for the end marker. Cutting at the LAST "<xml>" is
+// safe because every script of this package writes text only through
+// UriEncode() (which encodes '<' as %3C) and otherwise only digits,
+// separators and fixed words.
 func splitOutput(raw []byte) ([]string, error) {
 	if i := bytes.LastIndex(raw, []byte("<xml>")); i >= 0 {
 		raw = raw[:i]
